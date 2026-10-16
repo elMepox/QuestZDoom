@@ -37,7 +37,17 @@ jobs:
         working-directory: Projects/Android
         run: |
           chmod +x ./gradlew
-          ./gradlew --no-daemon assembleRelease
+          set +e
+          ./gradlew --no-daemon assembleRelease 2>&1 | tee /tmp/gradle.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # Surface the failure reason as an annotation (readable without log access).
+            SUMMARY=$(awk '/\* What went wrong/{f=1} f' /tmp/gradle.log | head -n 45)
+            if [ -z "$SUMMARY" ]; then SUMMARY=$(tail -n 60 /tmp/gradle.log); fi
+            ENC=$(printf '%s' "$SUMMARY" | tr -d '\r' | sed -e 's/%/%25/g' | awk 'BEGIN{ORS="%0A"}{print}')
+            echo "::error title=Gradle build failed::$ENC"
+          fi
+          exit "$status"
 
       - name: Verify 16 KB page alignment
         working-directory: Projects/Android
