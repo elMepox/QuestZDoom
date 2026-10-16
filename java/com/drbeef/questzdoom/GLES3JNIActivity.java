@@ -15,8 +15,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.Settings;
-import android.support.v4.app.ActivityCompat;
-import android.support.v4.content.ContextCompat;
 import android.util.Log;
 import android.os.RemoteException;
 import android.view.SurfaceHolder;
@@ -189,10 +187,9 @@ import java.util.Locale;
 			return;
 		}
 
-		if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+		if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
 				!= PackageManager.PERMISSION_GRANTED) {
-			ActivityCompat.requestPermissions(
-					this,
+			requestPermissions(
 					new String[]{Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE},
 					WRITE_EXTERNAL_STORAGE_PERMISSION_ID);
 			return;

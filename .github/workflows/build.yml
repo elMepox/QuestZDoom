@@ -1,0 +1,55 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ master, modernize-build ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout (with the gzdoom engine submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK platform, build tools and NDK
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+
+      - name: Build release APK
+        working-directory: Projects/Android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleRelease
+
+      - name: Verify 16 KB page alignment
+        working-directory: Projects/Android
+        run: |
+          APK=$(find build/outputs/apk/release -name '*.apk' | head -n 1)
+          echo "APK: $APK"
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$APK" | tail -n 5
+          mkdir -p /tmp/apkx && unzip -o -q "$APK" 'lib/*' -d /tmp/apkx
+          for so in $(find /tmp/apkx -name '*.so'); do
+            echo "$so"
+            "$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump" -p "$so" | grep LOAD | awk '{print "  align", $NF}' | sort -u
+          done
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: questzdoom-release-apk
+          path: Projects/Android/build/outputs/apk/release/*.apk

@@ -21,21 +21,14 @@
 	<application android:allowBackup="false"
 			android:icon="@drawable/ic_qquest"
 			android:label="@string/qzdoom"
-			android:extractNativeLibs="true"
 			android:requestLegacyExternalStorage="true">
 
 		
-		<meta-data android:name="com.samsung.android.vr.application.mode" android:value="vr_only"/>
-
 		<!-- META QUEST -->
-		<meta-data android:name="com.oculus.supportedDevices" android:value="quest2|questpro|quest3"/>
+		<meta-data android:name="com.oculus.supportedDevices" android:value="quest2|questpro|quest3|quest3s"/>
 		<meta-data android:name="com.oculus.ossplash" android:value="true"/>
 		<meta-data android:name="com.oculus.dualcorecpuset" android:value="true" />
 		<meta-data android:name="com.oculus.trade_cpu_for_gpu_amount" android:value="-1" />
-
-		<!-- PICO XR -->
-		<meta-data android:name="pvr.app.type" android:value="vr" />
-		<meta-data android:name="pxr.controller" android:value="1" />
 
 		<!-- The activity is the built-in NativeActivity framework class. -->
 		<!-- launchMode is set to singleTask because there should never be multiple copies of the app running. -->
@@ -59,7 +52,6 @@
 				<action android:name="android.intent.action.MAIN" />
 				<category android:name="android.intent.category.LAUNCHER" />
 				<category android:name="com.oculus.intent.category.VR" />
-				<category android:name="com.picovr.intent.category.LAUNCHER" />
 				<category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
 			</intent-filter>
 		</activity>

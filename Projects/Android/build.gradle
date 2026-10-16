@@ -5,7 +5,7 @@ buildscript {
     }
 
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.2.2'
+        classpath 'com.android.tools.build:gradle:9.4.0'
     }
 }
 
@@ -18,41 +18,52 @@ allprojects {
 
 apply plugin: 'com.android.application'
 
-android {
-    namespace "com.drbeef.questzdoom"
-    compileSdk 34
-    ndkVersion "26.1.10909125"
+def appBaseName = "questzdoom"
 
-    project.archivesBaseName = "questzdoom"
+base {
+    archivesName = appBaseName
+}
+
+// Directory the OpenXR loader is unpacked into (see extractOpenXrLoader below).
+def openxrJniLibsDir = layout.buildDirectory.dir("generated/openxr-loader/jniLibs").get().asFile
+
+android {
+    namespace = "com.drbeef.questzdoom"
+    compileSdk = 36
+    // r28c: the AGP 9 default NDK. r28+ links 16 KB page-aligned by default.
+    ndkVersion = "28.2.13676358"
 
     packaging {
         jniLibs {
             keepDebugSymbols += "**/*.so"
-            useLegacyPackaging = true
+            // Uncompressed, page-aligned native libraries (required for 16 KB page size devices).
+            useLegacyPackaging = false
         }
     }
 
     defaultConfig {
-        applicationId "com.drbeef." + project.archivesBaseName
-        minSdk 29
-        targetSdk 34
+        applicationId = "com.drbeef." + appBaseName
+        minSdk = 29
+        // Meta requires target API 34 for new Horizon apps.
+        targetSdk = 34
 
         ndk {
-            abiFilters 'arm64-v8a'
+            abiFilters.add('arm64-v8a')
         }
 
         externalNativeBuild {
             ndkBuild {
                 def numProcs = Runtime.runtime.availableProcessors()
-                arguments "V=0", "-j$numProcs"
-                abiFilters 'arm64-v8a'
+                arguments.add("V=0")
+                arguments.add("-j$numProcs")
+                abiFilters.add('arm64-v8a')
             }
         }
     }
 
     externalNativeBuild {
         ndkBuild {
-            path file('jni/Android.mk')
+            path = file('jni/Android.mk')
         }
     }
 
@@ -71,42 +82,42 @@ android {
                 project.getProperty('key.alias.password') : 'android'
 
         debug {
-            storeFile keystorePath
-            storePassword keystorePassword
-            keyAlias keystoreKeyAlias
-            keyPassword keystoreKeyPassword
-            v2SigningEnabled true
+            storeFile = keystorePath
+            storePassword = keystorePassword
+            keyAlias = keystoreKeyAlias
+            keyPassword = keystoreKeyPassword
+            enableV2Signing = true
         }
 
         release {
-            storeFile keystorePath
-            storePassword keystorePassword
-            keyAlias keystoreKeyAlias
-            keyPassword keystoreKeyPassword
-            v2SigningEnabled true
+            storeFile = keystorePath
+            storePassword = keystorePassword
+            keyAlias = keystoreKeyAlias
+            keyPassword = keystoreKeyPassword
+            enableV2Signing = true
         }
     }
 
     buildTypes {
         debug {
-            signingConfig signingConfigs.debug
-            debuggable true
-            jniDebuggable true
+            signingConfig = signingConfigs.debug
+            debuggable = true
             externalNativeBuild {
                 ndkBuild {
-                    arguments "NDK_DEBUG=1", "USE_ASAN=1"
+                    arguments.add("NDK_DEBUG=1")
+                    arguments.add("USE_ASAN=1")
                 }
             }
         }
 
         release {
-            signingConfig signingConfigs.release
-            debuggable false
-            jniDebuggable false
-            minifyEnabled false
+            signingConfig = signingConfigs.release
+            debuggable = false
+            minifyEnabled = false
             externalNativeBuild {
                 ndkBuild {
-                    arguments "NDK_DEBUG=0", "USE_ASAN=0"
+                    arguments.add("NDK_DEBUG=0")
+                    arguments.add("USE_ASAN=0")
                 }
             }
         }
@@ -115,20 +126,19 @@ android {
     sourceSets.main {
         manifest.srcFile 'AndroidManifest.xml'
         java.srcDirs = ['../../java']
-        jniLibs.srcDirs = ['libs', "$buildDir/generated/openxr-loader/jniLibs"]
+        jniLibs.srcDirs = ['libs', openxrJniLibsDir]
         res.srcDirs = ['../../res']
         assets.srcDirs = ['../../assets', 'jni/gzdoom-g3.3mgw_mobile/fm_banks', 'jni/gzdoom-g3.3mgw_mobile/soundfont']
-        jni.srcDirs = ['jni']
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     lint {
-        abortOnError false
-        checkReleaseBuilds false
+        abortOnError = false
+        checkReleaseBuilds = false
     }
 }
 
@@ -137,8 +147,6 @@ configurations {
 }
 
 dependencies {
-    implementation "com.android.support:support-compat:28.0.0"
-    implementation "com.android.support:support-core-utils:28.0.0"
     implementation "org.khronos.openxr:openxr_loader_for_android:1.1.60"
     openxrLoaderAar "org.khronos.openxr:openxr_loader_for_android:1.1.60@aar"
     implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
@@ -152,7 +160,7 @@ tasks.register("extractOpenXrLoader", Copy) {
         }
         includeEmptyDirs = false
     }
-    into "$buildDir/generated/openxr-loader/jniLibs"
+    into openxrJniLibsDir
 }
 
 tasks.named("preBuild").configure {
