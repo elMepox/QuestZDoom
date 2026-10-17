@@ -44,6 +44,8 @@ android {
                     "-DNO_OPENAL=OFF",
                     "-DDYN_OPENAL=ON",
                     "-DFORCE_NO_LTO=ON",
+                    // The NDK links libomp.so dynamically and it is not packaged: drop OpenMP.
+                    "-DNO_OPENMP=ON",
                     "-DBUILD_NONFREE=OFF",
                     "-DDYN_SNDFILE=ON",
                     "-DDYN_MPG123=ON",
