@@ -117,7 +117,7 @@ index 53beadc..030f756 100644
  target_include_directories( zdoom PRIVATE ${CMAKE_BINARY_DIR} )
  
 diff --git a/src/common/cutscenes/movieplayer.cpp b/src/common/cutscenes/movieplayer.cpp
-index bdf5edd..f7070e8 100644
+index bdf5edd..1abdea4 100644
 --- a/src/common/cutscenes/movieplayer.cpp
 +++ b/src/common/cutscenes/movieplayer.cpp
 @@ -32,8 +32,10 @@
@@ -139,14 +139,14 @@ index bdf5edd..f7070e8 100644
  class VpxPlayer : public MoviePlayer
  {
  	bool failed = false;
-@@ -636,6 +639,7 @@ struct AudioData
- 	int nWrite = 0;
- 	int nRead = 0;
+@@ -622,6 +625,7 @@ public:
+ 		return animtex.GetFrameID();
+ 	}
  };
 +#endif // NO_LIBVPX
  
- class SmkPlayer : public MoviePlayer
- {
+ //---------------------------------------------------------------------------
+ //
 @@ -893,6 +897,7 @@ MoviePlayer* OpenMovie(const char* filename, TArray<int>& ans, const int* framet
  		}
  		return anm;
