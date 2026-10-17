@@ -42,6 +42,29 @@ int xr_frame_end(int uiWanted);
 // Logging helpers: xr_trace() is true for the first frames and then every 300th; xr_log writes to logcat (tag DoomXR-XR).
 int xr_trace(void);
 void xr_log(const char *fmt, ...);
+// ---- controllers (OpenXR actions, Oculus Touch profile) ----
+enum
+{
+	XRB_A = 1, XRB_B = 2, XRB_X = 4, XRB_Y = 8,
+	XRB_LTHUMB = 16, XRB_RTHUMB = 32, XRB_MENU = 64
+};
+typedef struct DoomXrInput
+{
+	float moveX, moveY;			// left thumbstick (x right, y forward)
+	float turnX, turnY;			// right thumbstick
+	float trigger[2], grip[2];	// [0] = left hand, [1] = right hand
+	unsigned buttons;			// XRB_* bits
+	int uiHit;					// the pointing hand's ray hits the floating 2D screen
+	float uiU, uiV;				// hit position on the screen, 0..1, origin top-left
+	int uiHand;					// hand doing the pointing
+} DoomXrInput;
+// Latest controller state (valid after the first running frame). Returns 0 while there is no session/focus.
+int xr_input_poll(DoomXrInput *out);
+void xr_haptic(int hand, float amplitude, float seconds);
+// Head rotation not yet handed to the engine, in degrees (yaw: counter-clockwise positive; pitch: down positive).
+// Taking the yaw moves the reference of xr_get_eye_view's yaw, so the renderer only adds the remaining difference.
+float xr_take_head_yaw_delta(void);
+float xr_take_head_pitch_delta(void);
 // Next frame, treat the current head pose as "forward".
 void xr_recenter(void);
 

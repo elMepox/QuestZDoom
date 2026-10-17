@@ -69,6 +69,21 @@ struct State
 	XrView lastViews[2];
 	bool haveLastViews = false;
 
+	// input
+	XrActionSet actionSet = XR_NULL_HANDLE;
+	XrAction aTrigger = XR_NULL_HANDLE, aSqueeze = XR_NULL_HANDLE, aStick = XR_NULL_HANDLE, aStickClick = XR_NULL_HANDLE;
+	XrAction aBtn1 = XR_NULL_HANDLE, aBtn2 = XR_NULL_HANDLE, aMenu = XR_NULL_HANDLE, aAim = XR_NULL_HANDLE, aHaptic = XR_NULL_HANDLE;
+	XrPath hand[2] = {XR_NULL_PATH, XR_NULL_PATH};
+	XrSpace aimSpace[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};
+	bool inputOk = false;
+	DoomXrInput input = {};
+	bool aimValid[2] = {false, false};
+	XrPosef aim[2];
+	float appliedPitch = 0;
+	Swap laser;			// tiny swapchain for the laser pointer quad
+	bool laserHit = false;
+	float laserLen = 0;
+
 	// recentering
 	unsigned frameNo = 0;
 	bool needRecenter = true;
@@ -229,6 +244,196 @@ void pollEvents()
 }
 } // namespace
 
+
+namespace
+{
+bool createAction(XrAction &out, const char *name, const char *loc, XrActionType type, bool perHand)
+{
+	XrActionCreateInfo ai = {XR_TYPE_ACTION_CREATE_INFO};
+	ai.actionType = type;
+	strncpy(ai.actionName, name, XR_MAX_ACTION_NAME_SIZE - 1);
+	strncpy(ai.localizedActionName, loc, XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
+	if (perHand)
+	{
+		ai.countSubactionPaths = 2;
+		ai.subactionPaths = g.hand;
+	}
+	return check(xrCreateAction(g.actionSet, &ai, &out), name);
+}
+
+XrPath path(const char *p)
+{
+	XrPath x = XR_NULL_PATH;
+	xrStringToPath(g.instance, p, &x);
+	return x;
+}
+
+bool setupInput()
+{
+	g.hand[0] = path("/user/hand/left");
+	g.hand[1] = path("/user/hand/right");
+	XrActionSetCreateInfo si = {XR_TYPE_ACTION_SET_CREATE_INFO};
+	strcpy(si.actionSetName, "gameplay");
+	strcpy(si.localizedActionSetName, "Gameplay");
+	if (!check(xrCreateActionSet(g.instance, &si, &g.actionSet), "xrCreateActionSet")) return false;
+
+	if (!createAction(g.aTrigger, "trigger", "Trigger", XR_ACTION_TYPE_FLOAT_INPUT, true) ||
+	    !createAction(g.aSqueeze, "squeeze", "Grip", XR_ACTION_TYPE_FLOAT_INPUT, true) ||
+	    !createAction(g.aStick, "thumbstick", "Thumbstick", XR_ACTION_TYPE_VECTOR2F_INPUT, true) ||
+	    !createAction(g.aStickClick, "thumbstick_click", "Thumbstick click", XR_ACTION_TYPE_BOOLEAN_INPUT, true) ||
+	    !createAction(g.aBtn1, "button_lower", "A / X", XR_ACTION_TYPE_BOOLEAN_INPUT, true) ||
+	    !createAction(g.aBtn2, "button_upper", "B / Y", XR_ACTION_TYPE_BOOLEAN_INPUT, true) ||
+	    !createAction(g.aMenu, "menu", "Menu", XR_ACTION_TYPE_BOOLEAN_INPUT, false) ||
+	    !createAction(g.aAim, "aim_pose", "Aim pose", XR_ACTION_TYPE_POSE_INPUT, true) ||
+	    !createAction(g.aHaptic, "haptic", "Haptic", XR_ACTION_TYPE_VIBRATION_OUTPUT, true))
+		return false;
+
+	struct { XrAction a; const char *p; } b[] = {
+		{g.aTrigger, "/user/hand/left/input/trigger/value"},     {g.aTrigger, "/user/hand/right/input/trigger/value"},
+		{g.aSqueeze, "/user/hand/left/input/squeeze/value"},     {g.aSqueeze, "/user/hand/right/input/squeeze/value"},
+		{g.aStick, "/user/hand/left/input/thumbstick"},          {g.aStick, "/user/hand/right/input/thumbstick"},
+		{g.aStickClick, "/user/hand/left/input/thumbstick/click"}, {g.aStickClick, "/user/hand/right/input/thumbstick/click"},
+		{g.aBtn1, "/user/hand/left/input/x/click"},              {g.aBtn1, "/user/hand/right/input/a/click"},
+		{g.aBtn2, "/user/hand/left/input/y/click"},              {g.aBtn2, "/user/hand/right/input/b/click"},
+		{g.aMenu, "/user/hand/left/input/menu/click"},
+		{g.aAim, "/user/hand/left/input/aim/pose"},              {g.aAim, "/user/hand/right/input/aim/pose"},
+		{g.aHaptic, "/user/hand/left/output/haptic"},            {g.aHaptic, "/user/hand/right/output/haptic"},
+	};
+	std::vector<XrActionSuggestedBinding> sb;
+	for (auto &e : b) sb.push_back({e.a, path(e.p)});
+	XrInteractionProfileSuggestedBinding ib = {XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+	ib.interactionProfile = path("/interaction_profiles/oculus/touch_controller");
+	ib.countSuggestedBindings = (uint32_t)sb.size();
+	ib.suggestedBindings = sb.data();
+	if (!check(xrSuggestInteractionProfileBindings(g.instance, &ib), "xrSuggestInteractionProfileBindings")) return false;
+
+	XrSessionActionSetsAttachInfo at = {XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
+	at.countActionSets = 1;
+	at.actionSets = &g.actionSet;
+	if (!check(xrAttachSessionActionSets(g.session, &at), "xrAttachSessionActionSets")) return false;
+
+	for (int i = 0; i < 2; i++)
+	{
+		XrActionSpaceCreateInfo sp = {XR_TYPE_ACTION_SPACE_CREATE_INFO};
+		sp.action = g.aAim;
+		sp.subactionPath = g.hand[i];
+		sp.poseInActionSpace.orientation.w = 1.f;
+		if (!check(xrCreateActionSpace(g.session, &sp, &g.aimSpace[i]), "xrCreateActionSpace")) return false;
+	}
+	return true;
+}
+
+float getFloat(XrAction a, XrPath sub)
+{
+	XrActionStateGetInfo gi = {XR_TYPE_ACTION_STATE_GET_INFO};
+	gi.action = a;
+	gi.subactionPath = sub;
+	XrActionStateFloat st = {XR_TYPE_ACTION_STATE_FLOAT};
+	if (XR_FAILED(xrGetActionStateFloat(g.session, &gi, &st)) || !st.isActive) return 0.f;
+	return st.currentState;
+}
+
+bool getBool(XrAction a, XrPath sub)
+{
+	XrActionStateGetInfo gi = {XR_TYPE_ACTION_STATE_GET_INFO};
+	gi.action = a;
+	gi.subactionPath = sub;
+	XrActionStateBoolean st = {XR_TYPE_ACTION_STATE_BOOLEAN};
+	if (XR_FAILED(xrGetActionStateBoolean(g.session, &gi, &st)) || !st.isActive) return false;
+	return st.currentState == XR_TRUE;
+}
+
+XrVector2f getVec2(XrAction a, XrPath sub)
+{
+	XrActionStateGetInfo gi = {XR_TYPE_ACTION_STATE_GET_INFO};
+	gi.action = a;
+	gi.subactionPath = sub;
+	XrActionStateVector2f st = {XR_TYPE_ACTION_STATE_VECTOR2F};
+	if (XR_FAILED(xrGetActionStateVector2f(g.session, &gi, &st)) || !st.isActive) return {0, 0};
+	return st.currentState;
+}
+
+// Intersects the aim ray with the floating screen. u,v: 0..1 from the top-left.
+bool hitScreen(const XrPosef &aim, float *u, float *v, float *dist)
+{
+	Vec3 d = rotate(aim.orientation, {0, 0, -1});
+	Vec3 n = rotate(g.uiPose.orientation, {0, 0, 1});
+	float den = d.x * n.x + d.y * n.y + d.z * n.z;
+	if (fabsf(den) < 1e-4f) return false;
+	Vec3 pq = {g.uiPose.position.x - aim.position.x, g.uiPose.position.y - aim.position.y, g.uiPose.position.z - aim.position.z};
+	float t = (pq.x * n.x + pq.y * n.y + pq.z * n.z) / den;
+	if (t <= 0.f) return false;
+	Vec3 hit = {aim.position.x + d.x * t - g.uiPose.position.x, aim.position.y + d.y * t - g.uiPose.position.y,
+	            aim.position.z + d.z * t - g.uiPose.position.z};
+	XrQuaternionf inv = {-g.uiPose.orientation.x, -g.uiPose.orientation.y, -g.uiPose.orientation.z, g.uiPose.orientation.w};
+	Vec3 l = rotate(inv, hit);
+	float uu = l.x / g.uiW + 0.5f, vv = 0.5f - l.y / g.uiH;
+	if (uu < 0.f || uu > 1.f || vv < 0.f || vv > 1.f) return false;
+	*u = uu;
+	*v = vv;
+	if (dist) *dist = t;
+	return true;
+}
+
+// Reads all actions for this frame (called from xr_frame_begin after the session is running).
+void updateInput()
+{
+	if (!g.inputOk) return;
+	XrActiveActionSet as = {g.actionSet, XR_NULL_PATH};
+	XrActionsSyncInfo sy = {XR_TYPE_ACTIONS_SYNC_INFO};
+	sy.countActiveActionSets = 1;
+	sy.activeActionSets = &as;
+	XrResult r = xrSyncActions(g.session, &sy);
+	DoomXrInput in = {};
+	if (XR_FAILED(r) || r == XR_SESSION_NOT_FOCUSED)
+	{
+		g.input = in;
+		g.aimValid[0] = g.aimValid[1] = false;
+		return;
+	}
+	XrVector2f ls = getVec2(g.aStick, g.hand[0]), rs = getVec2(g.aStick, g.hand[1]);
+	in.moveX = ls.x; in.moveY = ls.y; in.turnX = rs.x; in.turnY = rs.y;
+	for (int i = 0; i < 2; i++)
+	{
+		in.trigger[i] = getFloat(g.aTrigger, g.hand[i]);
+		in.grip[i] = getFloat(g.aSqueeze, g.hand[i]);
+	}
+	if (getBool(g.aBtn1, g.hand[1])) in.buttons |= XRB_A;
+	if (getBool(g.aBtn2, g.hand[1])) in.buttons |= XRB_B;
+	if (getBool(g.aBtn1, g.hand[0])) in.buttons |= XRB_X;
+	if (getBool(g.aBtn2, g.hand[0])) in.buttons |= XRB_Y;
+	if (getBool(g.aStickClick, g.hand[0])) in.buttons |= XRB_LTHUMB;
+	if (getBool(g.aStickClick, g.hand[1])) in.buttons |= XRB_RTHUMB;
+	if (getBool(g.aMenu, XR_NULL_PATH)) in.buttons |= XRB_MENU;
+
+	for (int i = 0; i < 2; i++)
+	{
+		XrSpaceLocation loc = {XR_TYPE_SPACE_LOCATION};
+		g.aimValid[i] = XR_SUCCEEDED(xrLocateSpace(g.aimSpace[i], g.space, g.displayTime, &loc)) &&
+		                (loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) && (loc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT);
+		if (g.aimValid[i]) g.aim[i] = loc.pose;
+	}
+	// The right hand points by default; the left hand takes over when only it is valid or its trigger is used.
+	int hand = (g.aimValid[1] && !(g.aimValid[0] && in.trigger[0] > 0.5f && in.trigger[1] < 0.5f)) ? 1 : 0;
+	in.uiHand = hand;
+	g.laserHit = false;
+	if (g.aimValid[hand] && g.uiWasShown)
+	{
+		float u, v, t;
+		if (hitScreen(g.aim[hand], &u, &v, &t))
+		{
+			in.uiHit = 1;
+			in.uiU = u;
+			in.uiV = v;
+			g.laserHit = true;
+			g.laserLen = t;
+		}
+	}
+	g.input = in;
+}
+
+} // namespace
+
 extern "C" {
 
 int xr_trace(void) { return g.frameNo < 30 || g.frameNo % 300 == 0; }
@@ -374,6 +579,9 @@ int xr_init(void)
 	rs.poseInReferenceSpace.orientation.w = 1.f;
 	if (!check(xrCreateReferenceSpace(g.session, &rs, &g.space), "xrCreateReferenceSpace")) return 0;
 
+	g.inputOk = setupInput();
+	LOGI("controller input %s", g.inputOk ? "ready (oculus/touch_controller profile)" : "FAILED to set up");
+
 	// The engine output is already gamma encoded: use an sRGB swapchain only if sRGB writes can be switched off.
 	const char *glext = (const char *)glGetString(GL_EXTENSIONS);
 	bool srgbControl = glext && strstr(glext, "GL_EXT_sRGB_write_control");
@@ -392,12 +600,65 @@ int xr_init(void)
 	    !createSwapchain(g.ui, format, g.width, g.height))
 		return 0;
 
+	if (!createSwapchain(g.laser, format, 8, 8)) LOGW("laser swapchain unavailable");
 	g.ok = true;
 	LOGI("OpenXR initialized");
 	return 1;
 }
 
 void xr_recenter(void) { g.needRecenter = true; }
+
+int xr_input_poll(DoomXrInput *out)
+{
+	if (!g.ok || !g.running || !g.inputOk) return 0;
+	if (out) *out = g.input;
+	return 1;
+}
+
+void xr_haptic(int hand, float amplitude, float seconds)
+{
+	if (!g.ok || !g.inputOk || hand < 0 || hand > 1) return;
+	XrHapticActionInfo hi = {XR_TYPE_HAPTIC_ACTION_INFO};
+	hi.action = g.aHaptic;
+	hi.subactionPath = g.hand[hand];
+	XrHapticVibration vb = {XR_TYPE_HAPTIC_VIBRATION};
+	vb.amplitude = amplitude;
+	vb.duration = (XrDuration)(seconds * 1e9);
+	vb.frequency = XR_FREQUENCY_UNSPECIFIED;
+	xrApplyHapticFeedback(g.session, &hi, (const XrHapticBaseHeader *)&vb);
+}
+
+float xr_take_head_yaw_delta(void)
+{
+	if (!g.ok || !g.haveOrigin || !g.haveLastViews) return 0.f;
+	const float h = yawOf(g.lastViews[0].pose.orientation);
+	float d = h - g.originYaw;
+	while (d > 3.14159265f) d -= 6.2831853f;
+	while (d <= -3.14159265f) d += 6.2831853f;
+	if (d == 0.f) return 0.f;
+	// Keep the head's offset from the origin point continuous in the world while the reference heading rotates.
+	const float px = 0.5f * (g.lastViews[0].pose.position.x + g.lastViews[1].pose.position.x) - g.originPos[0];
+	const float pz = 0.5f * (g.lastViews[0].pose.position.z + g.lastViews[1].pose.position.z) - g.originPos[2];
+	const float s0 = sinf(g.originYaw), c0 = cosf(g.originYaw);
+	const float a = -s0 * px - c0 * pz, b = c0 * px - s0 * pz;	// forward, right in the old frame
+	const float s1 = sinf(h), c1 = cosf(h);
+	const float nx = a * -s1 + b * c1, nz = a * -c1 + b * -s1;
+	g.originPos[0] = 0.5f * (g.lastViews[0].pose.position.x + g.lastViews[1].pose.position.x) - nx;
+	g.originPos[2] = 0.5f * (g.lastViews[0].pose.position.z + g.lastViews[1].pose.position.z) - nz;
+	g.originYaw = h;
+	return d * kRad2Deg;
+}
+
+float xr_take_head_pitch_delta(void)
+{
+	if (!g.ok || !g.haveLastViews) return 0.f;
+	Vec3 f = rotate(g.lastViews[0].pose.orientation, {0, 0, -1});
+	float fy = f.y < -1.f ? -1.f : (f.y > 1.f ? 1.f : f.y);
+	const float p = -asinf(fy) * kRad2Deg;
+	const float d = p - g.appliedPitch;
+	g.appliedPitch = p;
+	return d;
+}
 
 int xr_frame_active(void) { return g.active ? 1 : 0; }
 
@@ -479,6 +740,7 @@ int xr_frame_begin(void)
 		g.needRecenter = false;
 		LOGI("recentered: yaw %.1f deg", g.originYaw * kRad2Deg);
 	}
+	updateInput();
 	g.active = true;
 
 	// Once a second: head pose in Doom conventions, to compare with how the user actually moves.
@@ -557,28 +819,46 @@ unsigned xr_ui_target_fbo(void)
 int xr_frame_end(int uiWanted)
 {
 	if (!g.ok || !g.frameBegun) return 0;
-	release(g.ui);
 
 	bool showUi = uiWanted && g.uiDrawn && g.shouldRender;
+	if (showUi && g.input.uiHit && g.ui.acquired)
+	{
+		// Pointer cursor drawn straight into the screen image: a white square with a red centre.
+		GLint prev = 0;
+		glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev);
+		GLboolean sc = glIsEnabled(GL_SCISSOR_TEST);
+		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g.ui.fbo);
+		glEnable(GL_SCISSOR_TEST);
+		const int cx = (int)(g.input.uiU * g.ui.width), cy = (int)((1.f - g.input.uiV) * g.ui.height);
+		static const GLfloat white[4] = {1, 1, 1, 1}, red[4] = {1, 0.1f, 0.1f, 1};
+		glScissor(cx - 9, cy - 9, 18, 18);
+		glClearBufferfv(GL_COLOR, 0, white);
+		glScissor(cx - 5, cy - 5, 10, 10);
+		glClearBufferfv(GL_COLOR, 0, red);
+		if (!sc) glDisable(GL_SCISSOR_TEST);
+		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev);
+	}
+	release(g.ui);
+
 	if (showUi && !g.uiWasShown)
 	{
-		// Float the screen in front of the head, upright and facing the user.
+		// Float the screen in front of the head, upright and facing the user, about 2 m wide at 2 m.
 		Vec3 head = {0.5f * (g.views[0].pose.position.x + g.views[1].pose.position.x),
 		             0.5f * (g.views[0].pose.position.y + g.views[1].pose.position.y),
 		             0.5f * (g.views[0].pose.position.z + g.views[1].pose.position.z)};
 		float yaw = yawOf(g.views[0].pose.orientation);
-		const float dist = 1.5f;
+		const float dist = 2.0f;
 		g.uiPose.position = {head.x - sinf(yaw) * dist, head.y, head.z - cosf(yaw) * dist};
 		g.uiPose.orientation = {0.f, sinf(yaw * 0.5f), 0.f, cosf(yaw * 0.5f)};
-		g.uiH = 1.5f;
-		g.uiW = g.uiH * (float)g.ui.width / (float)g.ui.height;
+		g.uiW = 2.0f;
+		g.uiH = g.uiW * (float)g.ui.height / (float)g.ui.width;
 	}
 	g.uiWasShown = showUi;
 
 	XrCompositionLayerProjectionView pv[2];
 	XrCompositionLayerProjection proj = {XR_TYPE_COMPOSITION_LAYER_PROJECTION};
 	XrCompositionLayerQuad quad = {XR_TYPE_COMPOSITION_LAYER_QUAD};
-	const XrCompositionLayerBaseHeader *layers[2];
+	const XrCompositionLayerBaseHeader *layers[3];
 	uint32_t nl = 0;
 
 	if (g.active && g.eyeDone[0] && g.eyeDone[1])
@@ -607,6 +887,56 @@ int xr_frame_end(int uiWanted)
 		quad.pose = g.uiPose;
 		quad.size = {g.uiW, g.uiH};
 		layers[nl++] = (const XrCompositionLayerBaseHeader *)&quad;
+	}
+
+	// Laser pointer: a thin quad from the pointing hand to the screen, drawn after (in front of) it.
+	XrCompositionLayerQuad laserQuad = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+	if (showUi && g.laserHit && g.laser.handle != XR_NULL_HANDLE && g.aimValid[g.input.uiHand])
+	{
+		if (GLuint fbo = acquire(g.laser))
+		{
+			GLint prev = 0;
+			glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev);
+			GLboolean sc = glIsEnabled(GL_SCISSOR_TEST);
+			glDisable(GL_SCISSOR_TEST);
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+			static const GLfloat cyan[4] = {0.3f, 0.9f, 1.f, 1.f};
+			glClearBufferfv(GL_COLOR, 0, cyan);
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev);
+			if (sc) glEnable(GL_SCISSOR_TEST);
+			release(g.laser);
+
+			const XrPosef &a = g.aim[g.input.uiHand];
+			Vec3 dir = rotate(a.orientation, {0, 0, -1});
+			const float len = g.laserLen;
+			Vec3 mid = {a.position.x + dir.x * len * 0.5f, a.position.y + dir.y * len * 0.5f, a.position.z + dir.z * len * 0.5f};
+			Vec3 toHead = {g.views[0].pose.position.x - mid.x, g.views[0].pose.position.y - mid.y, g.views[0].pose.position.z - mid.z};
+			float dd = toHead.x * dir.x + toHead.y * dir.y + toHead.z * dir.z;
+			Vec3 z = {toHead.x - dir.x * dd, toHead.y - dir.y * dd, toHead.z - dir.z * dd};
+			float zl = sqrtf(z.x * z.x + z.y * z.y + z.z * z.z);
+			if (zl > 1e-4f)
+			{
+				z = {z.x / zl, z.y / zl, z.z / zl};
+				Vec3 y = {z.y * dir.z - z.z * dir.y, z.z * dir.x - z.x * dir.z, z.x * dir.y - z.y * dir.x};
+				// Rotation matrix with columns x = dir, y, z -> quaternion.
+				float m00 = dir.x, m10 = dir.y, m20 = dir.z, m01 = y.x, m11 = y.y, m21 = y.z, m02 = z.x, m12 = z.y, m22 = z.z;
+				XrQuaternionf q;
+				float tr = m00 + m11 + m22;
+				if (tr > 0) { float sq = sqrtf(tr + 1.f) * 2; q = {(m21 - m12) / sq, (m02 - m20) / sq, (m10 - m01) / sq, 0.25f * sq}; }
+				else if (m00 > m11 && m00 > m22) { float sq = sqrtf(1.f + m00 - m11 - m22) * 2; q = {0.25f * sq, (m01 + m10) / sq, (m02 + m20) / sq, (m21 - m12) / sq}; }
+				else if (m11 > m22) { float sq = sqrtf(1.f + m11 - m00 - m22) * 2; q = {(m01 + m10) / sq, 0.25f * sq, (m12 + m21) / sq, (m02 - m20) / sq}; }
+				else { float sq = sqrtf(1.f + m22 - m00 - m11) * 2; q = {(m02 + m20) / sq, (m12 + m21) / sq, 0.25f * sq, (m10 - m01) / sq}; }
+				laserQuad.space = g.space;
+				laserQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+				laserQuad.subImage.swapchain = g.laser.handle;
+				laserQuad.subImage.imageRect.offset = {0, 0};
+				laserQuad.subImage.imageRect.extent = {g.laser.width, g.laser.height};
+				laserQuad.pose.orientation = q;
+				laserQuad.pose.position = {mid.x, mid.y, mid.z};
+				laserQuad.size = {len, 0.006f};
+				layers[nl++] = (const XrCompositionLayerBaseHeader *)&laserQuad;
+			}
+		}
 	}
 
 	if (nl == 0 && g.shouldRender && g.frameNo < 600)
