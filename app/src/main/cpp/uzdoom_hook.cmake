@@ -65,10 +65,22 @@ if(DOOMXR_OPENAL_DIR)
   set_target_properties(OpenAL PROPERTIES VERSION "" SOVERSION "")
 endif()
 
-# --- 4. assets for the APK -------------------------------------------------------------------------
+# --- 4. OpenXR layer -------------------------------------------------------------------------------
+# The Khronos loader comes from the openxr_loader_for_android AAR via prefab (see app/build.gradle.kts).
+find_package(OpenXR REQUIRED CONFIG)
+add_library(doomxr_xr STATIC "${CMAKE_CURRENT_LIST_DIR}/xr/xr_vr.cpp")
+set_target_properties(doomxr_xr PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(doomxr_xr PUBLIC "${CMAKE_CURRENT_LIST_DIR}/xr")
+target_include_directories(doomxr_xr PRIVATE "${CMAKE_BINARY_DIR}/sdl2-include")
+target_link_libraries(doomxr_xr PUBLIC OpenXR::openxr_loader EGL GLESv3 log)
+
+# --- 5. assets for the APK -------------------------------------------------------------------------
 set(DOOMXR_HOOK_DIR "${CMAKE_CURRENT_LIST_DIR}" CACHE INTERNAL "")
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _doomxr_finish)
 function(_doomxr_finish)
+  # zdoom uses the plain target_link_libraries signature, so must we.
+  target_link_libraries(zdoom doomxr_xr)
+  target_compile_definitions(zdoom PRIVATE DOOMXR_OPENXR=1)
   if(TARGET OpenAL)
     add_dependencies(zdoom OpenAL)
   endif()
