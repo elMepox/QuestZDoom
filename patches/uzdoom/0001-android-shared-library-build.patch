@@ -79,7 +79,7 @@ index 2d73155..896e5af 100644
  	pkg_check_modules(DBUS dbus-1)
  	if (!DBUS_FOUND)
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 53beadc..030f756 100644
+index 53beadc..638157d 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -338,7 +338,10 @@ if( MSVC AND NOT VPX_FOUND )
@@ -120,6 +120,15 @@ index 53beadc..030f756 100644
  
  target_include_directories( zdoom PRIVATE ${CMAKE_BINARY_DIR} )
  
+@@ -1429,6 +1442,8 @@ elseif (APPLE)
+ 	IF ("${INSTALL_RPATH}" STREQUAL "")
+ 		set_target_properties(zdoom PROPERTIES MACOSX_RPATH TRUE)
+ 	endif()
++elseif (ANDROID)
++	# nothing: the shared library is loaded by SDLActivity from the APK's lib dir
+ else()
+ 	FILE( WRITE ${CMAKE_CURRENT_BINARY_DIR}/link-make "if [ ! -e ${ZDOOM_OUTPUT_DIR}/${ZDOOM_EXE_NAME} ]; then ln -sf ${CMAKE_CURRENT_BINARY_DIR}/${ZDOOM_EXE_NAME} ${ZDOOM_OUTPUT_DIR}/${ZDOOM_EXE_NAME}; fi" )
+ 	add_custom_command( TARGET zdoom POST_BUILD
 diff --git a/src/common/cutscenes/movieplayer.cpp b/src/common/cutscenes/movieplayer.cpp
 index bdf5edd..1abdea4 100644
 --- a/src/common/cutscenes/movieplayer.cpp

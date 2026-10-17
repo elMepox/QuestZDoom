@@ -34,7 +34,7 @@ android {
                     "-DDOOMXR_HOST_TOOLS_SRC=${file("src/main/cpp/host-tools").absolutePath}",
                     "-DCMAKE_PROJECT_UZDoom_INCLUDE=${file("src/main/cpp/uzdoom_hook.cmake").absolutePath}",
                     // UZDoom options
-                    "-DZDOOM_EXE_NAME=main",
+                    "-DZDOOM_EXE_NAME:STRING=main",
                     "-DHAVE_VULKAN=OFF",
                     "-DHAVE_GLES2=ON",
                     "-DNO_OPENAL=OFF",
