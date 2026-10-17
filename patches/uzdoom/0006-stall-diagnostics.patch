@@ -1,0 +1,143 @@
+diff --git a/src/d_main.cpp b/src/d_main.cpp
+index 205dad7..2bb16d6 100644
+--- a/src/d_main.cpp
++++ b/src/d_main.cpp
+@@ -388,6 +388,7 @@ void D_DoomLoop ();
+ #include <chrono>
+ const char * volatile g_doomxrStage = "startup";
+ volatile unsigned g_doomxrLoopCount = 0;
++volatile int g_doomxrTotalTics = -99, g_doomxrRunTics = -99, g_doomxrAvailTics = -99, g_doomxrEnterTic = -99, g_doomxrLastEnterTic = -99;
+ #define XRSTAGE(s) (g_doomxrStage = (s))
+ #include "menustate.h"
+ static struct DoomxrWatchdog
+@@ -400,8 +401,10 @@ static struct DoomxrWatchdog
+ 			{
+ 				std::this_thread::sleep_for(std::chrono::seconds(1));
+ 				const unsigned now = g_doomxrLoopCount;
+-				__android_log_print(ANDROID_LOG_INFO, "DoomXR-XR", "heartbeat: stage=%s loops=%u (+%u) gametic=%d gamestate=%d menuactive=%d tic=%d",
+-				                    g_doomxrStage, now, now - last, gametic, (int)gamestate, (int)menuactive, I_GetTime());
++				__android_log_print(ANDROID_LOG_INFO, "DoomXR-XR", "heartbeat: stage=%s loops=%u (+%u) gametic=%d gamestate=%d menuactive=%d tic=%d ms=%llu",
++				                    g_doomxrStage, now, now - last, gametic, (int)gamestate, (int)menuactive, I_GetTime(), (unsigned long long)I_msTime());
++				__android_log_print(ANDROID_LOG_INFO, "DoomXR-XR", "heartbeat: enterTic=%d lastEnterTic=%d totalTics=%d availableTics=%d runTics=%d advancedemo=%d gameaction=%d",
++				                    g_doomxrEnterTic, g_doomxrLastEnterTic, g_doomxrTotalTics, g_doomxrAvailTics, g_doomxrRunTics, (int)advancedemo, (int)gameaction);
+ 				last = now;
+ 			}
+ 		}).detach();
+@@ -1880,6 +1883,7 @@ void D_DoAdvanceDemo (void)
+ 	static int pagecount;
+ 	FString pagename;
+ 
++	XRSTAGE("AdvanceDemo:entry");
+ 	advancedemo = false;
+ 
+ 	if (gameaction != ga_nothing)
+@@ -1894,8 +1898,10 @@ void D_DoAdvanceDemo (void)
+ 	// [RH] If you want something more dynamic for your title, create a map
+ 	// and name it TITLEMAP. That map will be loaded and used as the title.
+ 
++	XRSTAGE("AdvanceDemo:P_CheckMapData(TITLEMAP)");
+ 	if (P_CheckMapData("TITLEMAP"))
+ 	{
++		XRSTAGE("AdvanceDemo:G_InitNew(TITLEMAP)");
+ 		G_InitNew ("TITLEMAP", true);
+ 		return;
+ 	}
+@@ -1946,11 +1952,14 @@ void D_DoAdvanceDemo (void)
+ 		gamestate = GS_DEMOSCREEN;
+ 		pagename = gameinfo.TitlePage;
+ 		pagetic = (int)(gameinfo.titleTime * TICRATE);
++		XRSTAGE("AdvanceDemo:S_ChangeMusic(title)");
+ 		if (!playedtitlemusic) S_ChangeMusic (gameinfo.titleMusic.GetChars(), gameinfo.titleOrder, false);
++		XRSTAGE("AdvanceDemo:after S_ChangeMusic");
+ 		playedtitlemusic = true;
+ 		demosequence = 3;
+ 		pagecount = 0;
+ 		C_HideConsole ();
++		XRSTAGE("AdvanceDemo:after C_HideConsole");
+ 		break;
+ 
+ 	case 2:
+@@ -1965,10 +1974,12 @@ void D_DoAdvanceDemo (void)
+ 		break;
+ 	}
+ 
++	XRSTAGE("AdvanceDemo:page texture");
+ 	if (pagename.IsNotEmpty())
+ 	{
+ 		Page = TexMan.CheckForTexture(pagename.GetChars(), ETextureType::MiscPatch);
+ 	}
++	XRSTAGE("AdvanceDemo:done");
+ }
+ 
+ //==========================================================================
+diff --git a/src/d_net.cpp b/src/d_net.cpp
+index 68e37a7..3b2c47c 100644
+--- a/src/d_net.cpp
++++ b/src/d_net.cpp
+@@ -2189,6 +2189,7 @@ static void CalculateNetStabilityBuffer(int diff)
+ //
+ #ifdef __ANDROID__
+ extern const char * volatile g_doomxrStage;
++extern volatile int g_doomxrTotalTics, g_doomxrRunTics, g_doomxrAvailTics, g_doomxrEnterTic, g_doomxrLastEnterTic;
+ #define XRSTAGE(s) (g_doomxrStage = (s))
+ #else
+ #define XRSTAGE(s) ((void)0)
+@@ -2220,6 +2221,9 @@ void TryRunTics()
+ 
+ 	const int startCommand = ClientTic;
+ 	int totalTics = EnterTic - LastEnterTic;
++#ifdef __ANDROID__
++	g_doomxrEnterTic = EnterTic; g_doomxrLastEnterTic = LastEnterTic; g_doomxrTotalTics = totalTics;
++#endif
+ 	if (totalTics > 1 && singletics)
+ 		totalTics = 1;
+ 
+@@ -2268,6 +2272,10 @@ void TryRunTics()
+ 	// If the amount of tics to run is falling behind the amount of available tics,
+ 	// speed the playsim up a bit to help catch up.
+ 	int runTics = min<int>(totalTics, availableTics);
++#ifdef __ANDROID__
++	g_doomxrAvailTics = availableTics; g_doomxrRunTics = runTics;
++	XRSTAGE("TryRunTics:before stability/run");
++#endif
+ 	if (!singletics && totalTics > 0)
+ 	{
+ 		CalculateNetStabilityBuffer(availableTics - totalTics);
+@@ -2322,6 +2330,7 @@ void TryRunTics()
+ 	LastGameUpdate = EnterTic;
+ 
+ 	// Run the available tics.
++	XRSTAGE("TryRunTics:P_UnPredictClient");
+ 	P_UnPredictClient();
+ 	while (runTics--)
+ 	{
+@@ -2329,6 +2338,7 @@ void TryRunTics()
+ 		if (stabilize)
+ 			TicStabilityBegin();
+ 
++		XRSTAGE(advancedemo ? "TryRunTics:D_DoAdvanceDemo" : "TryRunTics:no advancedemo");
+ 		if (advancedemo)
+ 			D_DoAdvanceDemo();
+ 
+@@ -2347,7 +2357,9 @@ void TryRunTics()
+ 			break;
+ 		}
+ 	}
++	XRSTAGE("TryRunTics:P_PredictClient");
+ 	P_PredictClient();
++	XRSTAGE("TryRunTics:P_RunClientSideLogic");
+ 
+ 	// These should use the actual tics since they're not actually tied to the gameplay logic.
+ 	// Make sure it always comes after so the HUD has the correct game state when updating.
+@@ -2356,8 +2368,11 @@ void TryRunTics()
+ 
+ 	// Since the level could get reset mid-tick, make sure the smaller of the two values is used
+ 	// since it should only go up otherwise.
++	XRSTAGE("TryRunTics:S_UpdateSounds");
+ 	S_UpdateSounds(players[consoleplayer].camera, primaryLevel->LocalWorldTimer - min<int>(primaryLevel->LocalWorldTimer, worldTimer));
++	XRSTAGE("TryRunTics:VerifyPredictedEntities");
+ 	NetworkEntityManager::VerifyPredictedEntities();
++	XRSTAGE("TryRunTics:done");
+ }
+ 
+ void Net_NewClientTic()
