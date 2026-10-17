@@ -15,7 +15,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 
 /**
- * Hosts the UZDoom engine through SDL2. Stage 2: flat window. The OpenXR layer replaces this later.
+ * Hosts the UZDoom engine through SDL2. Flat SDL window with an OpenXR layer (see cpp/xr) on top.
  *
  * Layout on the device:
  *   getExternalFilesDir()/            user content: drop IWADs (freedoom1.wad, doom.wad ...) here
@@ -45,7 +45,9 @@ public class DoomXRActivity extends SDLActivity {
     protected String[] getArguments() {
         // UZDoom's GLES renderer; Vulkan is not built in.
         java.util.List<String> args = new java.util.ArrayList<>(java.util.Arrays.asList(
-                "+vid_preferbackend", "2", "+gl_es", "1"));
+                "+vid_preferbackend", "2", "+gl_es", "1",
+                // vr_mode 15 = OpenXR stereo; falls back to the flat window if OpenXR cannot start.
+                "+vr_mode", "15"));
         // No commercial IWAD supplied by the user: fall back to the bundled Freedoom.
         if (!hasUserIwad()) {
             args.add("-iwad");

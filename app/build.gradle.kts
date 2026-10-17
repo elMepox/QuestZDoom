@@ -54,6 +54,11 @@ android {
         }
     }
 
+    buildFeatures {
+        // OpenXR loader (libopenxr_loader.so + headers) is consumed as a prefab package.
+        prefab = true
+    }
+
     externalNativeBuild {
         cmake {
             // The engine is built straight from its own CMake project; our hook file
@@ -90,6 +95,10 @@ android {
         abortOnError = false
         checkReleaseBuilds = false
     }
+}
+
+dependencies {
+    implementation("org.khronos.openxr:openxr_loader_for_android:1.1.65")
 }
 
 androidComponents {
