@@ -1,0 +1,55 @@
+name: Android
+
+on:
+  push:
+    branches: [doomxr]
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install SDK components
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;28.2.13676358" \
+            "cmake;3.31.6"
+
+      - name: Build debug APK
+        run: ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doomxr-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload native build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmake-logs
+          path: |
+            app/.cxx/**/*.txt
+            app/.cxx/**/*.log
+            app/.cxx/**/CMakeError.log
+          if-no-files-found: ignore
