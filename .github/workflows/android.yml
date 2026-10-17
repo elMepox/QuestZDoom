@@ -35,7 +35,16 @@ jobs:
             "cmake;3.31.6"
 
       - name: Build debug APK
-        run: ./gradlew --no-daemon --stacktrace assembleDebug
+        run: |
+          set +e
+          ./gradlew --no-daemon assembleDebug 2>&1 | tee build.log
+          rc=${PIPESTATUS[0]}
+          if [ $rc -ne 0 ]; then
+            echo "=== FAILURE SUMMARY ==="
+            grep -n -E "error:|Error:|FAILED|What went wrong|CMake Error|undefined" build.log | cut -c1-300 | tail -40
+            grep -n -A12 "What went wrong" build.log | cut -c1-300 | head -40
+          fi
+          exit $rc
 
       - uses: actions/upload-artifact@v4
         with:
