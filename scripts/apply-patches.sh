@@ -13,12 +13,18 @@ patches=("$root"/patches/uzdoom/*.patch)
 gitdir="$(git -C "$target" rev-parse --absolute-git-dir)"
 stamp="$gitdir/doomxr-patches.stamp"
 sum="$(cat "${patches[@]}" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1)-$(git -C "$target" rev-parse HEAD)"
-if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$sum" ]; then
-  echo "UZDoom patches up to date"
-  exit 0
+last="${patches[${#patches[@]}-1]}"
+if [ -f "$stamp" ]; then
+  # A stamp is only trusted while the newest patch is really applied (the worktree may have been reset).
+  if [ "$(cat "$stamp")" = "$sum" ] && git -C "$target" apply --check --reverse "$last" 2>/dev/null; then
+    echo "UZDoom patches up to date"
+    exit 0
+  fi
+  rm -f "$stamp"
 fi
 
-# Highest patch that is currently applied (everything before it is assumed applied too).
+# Patches are applied in series order, so the applied ones form a prefix: find the highest applied patch
+# and continue with the first unapplied one.
 applied=-1
 for ((i=${#patches[@]}-1; i>=0; i--)); do
   if git -C "$target" apply --check --reverse "${patches[$i]}" 2>/dev/null; then applied=$i; break; fi
