@@ -3,6 +3,8 @@ name: Android
 on:
   push:
     branches: [doomxr]
+  pull_request:
+    branches: [doomxr]
   workflow_dispatch:
 
 concurrency:

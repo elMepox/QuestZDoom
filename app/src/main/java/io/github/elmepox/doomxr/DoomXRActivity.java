@@ -6,6 +6,8 @@ import android.system.ErrnoException;
 import android.system.Os;
 import android.util.Log;
 
+import io.github.elmepox.doomxr.mods.LaunchProfile;
+
 import org.libsdl.app.SDLActivity;
 
 import java.io.File;
@@ -50,14 +52,33 @@ public class DoomXRActivity extends SDLActivity {
                 "+vr_mode", "15",
                 // Desktop launcher / IWAD picker cannot work on Android.
                 "+queryiwad", "0"));
-        // No commercial IWAD supplied by the user: fall back to the bundled Freedoom.
-        if (!hasUserIwad()) {
+        LaunchProfile profile = readProfile();
+        if (profile != null) {
+            // Chosen in the library panel; an empty IWAD means the bundled Freedoom.
+            File base = getExternalFilesDir(null) != null ? getExternalFilesDir(null) : getFilesDir();
+            if (profile.iwad.isEmpty()) {
+                args.add("-iwad");
+                args.add("freedoom2.wad");
+            }
+            args.addAll(profile.toArguments(new File(base, "mods").getAbsolutePath()));
+        } else if (!hasUserIwad()) {
+            // No commercial IWAD supplied by the user: fall back to the bundled Freedoom.
             args.add("-iwad");
             args.add("freedoom2.wad");
         }
         addTestArguments(args);
         Log.i(TAG, "engine arguments: " + args);
         return args.toArray(new String[0]);
+    }
+
+    private LaunchProfile readProfile() {
+        try {
+            String json = getIntent() != null ? getIntent().getStringExtra(LaunchProfile.INTENT_EXTRA) : null;
+            return json == null ? null : LaunchProfile.fromJson(json);
+        } catch (Exception e) {
+            Log.w(TAG, "bad launch profile", e);
+            return null;
+        }
     }
 
     /**
