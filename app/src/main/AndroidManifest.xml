@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:metavr="http://schemas.meta.com/metavr-sdk"
     android:installLocation="auto">
+
+    <!-- Horizon OS SDK versions (developers.meta.com: Meta VR OS SDK versioning, uses-metavr-sdk). -->
+    <metavr:uses-metavr-sdk metavr:minSdkVersion="207" metavr:targetSdkVersion="207" />
 
     <!-- Immersive OpenXR app on Meta Quest. -->
     <uses-feature android:name="android.hardware.vr.headtracking" android:version="1" android:required="true" />

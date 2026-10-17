@@ -1,0 +1,138 @@
+diff --git a/src/common/platform/posix/sdl/sdlglvideo.cpp b/src/common/platform/posix/sdl/sdlglvideo.cpp
+index df33338..1cf536d 100644
+--- a/src/common/platform/posix/sdl/sdlglvideo.cpp
++++ b/src/common/platform/posix/sdl/sdlglvideo.cpp
+@@ -206,8 +206,14 @@ namespace Priv
+ 		if (gl_es)
+ 		{
+ 			SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
++#ifdef DOOMXR_OPENXR
++			// OpenXR (swapchain blits) needs an ES 3.x context; the engine's GLSL 100 shaders still work in it.
++			SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
++			SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
++#else
+ 			SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+ 			SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
++#endif
+ 		}
+ 		else if (glver[0] > 2)
+ 		{
+@@ -653,7 +659,9 @@ void ProcessSDLWindowEvent(const SDL_WindowEvent &event)
+ 
+ 	case SDL_WINDOWEVENT_FOCUS_LOST:
+ 		S_SetSoundPaused(0);
+-		AppActive = false;
++#ifndef __ANDROID__
++		AppActive = false;	// on a headset focus comes from the OpenXR session, not from SDL
++#endif
+ 		break;
+ 
+ 	case SDL_WINDOWEVENT_MOVED:
+diff --git a/src/common/rendering/gles/gles_framebuffer.cpp b/src/common/rendering/gles/gles_framebuffer.cpp
+index 28dd1a1..94e15c0 100644
+--- a/src/common/rendering/gles/gles_framebuffer.cpp
++++ b/src/common/rendering/gles/gles_framebuffer.cpp
+@@ -237,12 +237,18 @@ void OpenGLFrameBuffer::Swap()
+ 
+ 	mVertexData->DropSync();
+ 
++#ifndef DOOMXR_OPENXR
+ 	FPSLimit();
++#else
++	if (!xr_is_initialized()) FPSLimit();	// with OpenXR, xrWaitFrame paces the loop
++#endif
+ #ifdef DOOMXR_OPENXR
+ 	// Show the flat 2D screen in the headset while a menu/console is up or when no 3D view was rendered.
+ 	const bool uiWanted = menuactive != MENU_Off || ConsoleState != c_up || !xrEyesRendered;
+ 	xrEyesRendered = false;
+-	if (!xr_frame_end(uiWanted))
++	const int xrEnded = xr_frame_end(uiWanted);
++	if (xr_trace()) xr_log("Swap: xr_frame_end handled=%d uiWanted=%d", xrEnded, (int)uiWanted);
++	if (!xrEnded)
+ #endif
+ 	SwapBuffers();
+ 
+@@ -341,6 +347,7 @@ void OpenGLFrameBuffer::XrEyeFinished(int eye)
+ 	GLRenderer->mBuffers->BindCurrentFB();
+ 	GLint fbo = 0;
+ 	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
++	if (xr_trace()) xr_log("XrEyeFinished eye %d: fbo %d size %dx%d", eye, (int)fbo, mScreenViewport.width, mScreenViewport.height);
+ 	xr_eye_blit(eye, (unsigned)fbo, mScreenViewport.width, mScreenViewport.height);
+ 	xrEyesRendered = true;
+ #endif
+@@ -380,7 +387,9 @@ void OpenGLFrameBuffer::WaitForCommands(bool finish)
+ void OpenGLFrameBuffer::BeginFrame()
+ {
+ #ifdef DOOMXR_OPENXR
+-	xr_frame_begin();	// must precede SetViewportRects: the stereo mode decides the viewport
++	const int xrStereo = xr_frame_begin();	// must precede SetViewportRects: the stereo mode decides the viewport
++	if (xr_trace())
++		xr_log("BeginFrame: stereo=%d screen=%dx%d client=%dx%d", xrStereo, GetWidth(), GetHeight(), GetClientWidth(), GetClientHeight());
+ #endif
+ 	SetViewportRects(nullptr);
+ 	mViewpoints->Clear();
+diff --git a/src/d_main.cpp b/src/d_main.cpp
+index 1b8750c..4e2b865 100644
+--- a/src/d_main.cpp
++++ b/src/d_main.cpp
+@@ -71,6 +71,9 @@
+ #include "g_levellocals.h"
+ #include "gameconfigfile.h"
+ #include "gi.h"
++#ifdef __ANDROID__
++#include <android/log.h>
++#endif
+ #include "gstrings.h"
+ #include "hu_stuff.h"
+ #include "hw_clock.h"
+@@ -1250,10 +1253,18 @@ void D_Display ()
+ 	if (nodrawers || screen == NULL)
+ 		return; 				// for comparative timing / profiling
+ 
++#ifdef __ANDROID__
++	// SDL focus events are meaningless on a headset (the window is never "focused"); the OpenXR session decides.
++	static unsigned drawnFrames = 0;
++	if (drawnFrames < 5 || drawnFrames % 1000 == 0)
++		__android_log_print(ANDROID_LOG_INFO, "DoomXR-XR", "D_Display #%u AppActive=%d", drawnFrames, (int)AppActive);
++	drawnFrames++;
++#else
+ 	if (!AppActive && !setmodeneeded && !vid_activeinbackground)
+ 	{
+ 		return;
+ 	}
++#endif
+ 
+ 	cycle_t cycles;
+ 
+diff --git a/src/rendering/hwrenderer/hw_entrypoint.cpp b/src/rendering/hwrenderer/hw_entrypoint.cpp
+index c79ef1c..3374dab 100644
+--- a/src/rendering/hwrenderer/hw_entrypoint.cpp
++++ b/src/rendering/hwrenderer/hw_entrypoint.cpp
+@@ -44,6 +44,7 @@
+ #ifdef DOOMXR_OPENXR
+ #include "xr_vr.h"
+ EXTERN_CVAR(Float, vr_hunits_per_meter)
++EXTERN_CVAR(Int, vr_mode)
+ #endif
+ 
+ EXTERN_CVAR(Bool, cl_capfps)
+@@ -128,6 +129,10 @@ sector_t* RenderViewpoint(FRenderViewpoint& mainvp, AActor* camera, IntRect* bou
+ 	// Render (potentially) multiple views for stereo 3d
+ 	// Fixme. The view offsetting should be done with a static table and not require setup of the entire render state for the mode.
+ 	auto vrmode = VRMode::GetVRMode(mainview && toscreen);
++#ifdef DOOMXR_OPENXR
++	if (mainview && toscreen && xr_trace() && !vrmode->IsOpenXR())
++		xr_log("RenderViewpoint: mono path (vr_mode=%d xr_frame_active=%d)", (int)vr_mode, xr_frame_active());
++#endif
+ 	const int eyeCount = vrmode->mEyeCount;
+ 	screen->FirstEye();
+ 	for (int eye_ix = 0; eye_ix < eyeCount; ++eye_ix)
+@@ -137,6 +142,8 @@ sector_t* RenderViewpoint(FRenderViewpoint& mainvp, AActor* camera, IntRect* bou
+ #ifdef DOOMXR_OPENXR
+ 		DoomXrEyeView xrEye = {};
+ 		const bool xrView = vrmode->IsOpenXR() && xr_get_eye_view(eye_ix, &xrEye);
++		if (xr_trace())
++			xr_log("RenderViewpoint eye %d: openxr=%d xrView=%d eyeCount=%d", eye_ix, (int)vrmode->IsOpenXR(), (int)xrView, eyeCount);
+ 		if (xrView)
+ 		{
+ 			// The eye image always covers the whole virtual screen (no status bar border / letterbox).

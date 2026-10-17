@@ -39,6 +39,9 @@ unsigned xr_ui_target_fbo(void);
 // Ends the frame. uiWanted shows the 2D screen as a floating quad. Returns non-zero when an XR frame was
 // ended (the caller must then not swap the window buffers).
 int xr_frame_end(int uiWanted);
+// Logging helpers: xr_trace() is true for the first frames and then every 300th; xr_log writes to logcat (tag DoomXR-XR).
+int xr_trace(void);
+void xr_log(const char *fmt, ...);
 // Next frame, treat the current head pose as "forward".
 void xr_recenter(void);
 

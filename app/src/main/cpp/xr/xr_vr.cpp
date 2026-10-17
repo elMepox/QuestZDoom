@@ -19,6 +19,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <vector>
 
 #define TAG "DoomXR-XR"
@@ -67,6 +68,7 @@ struct State
 	XrView views[2];
 
 	// recentering
+	unsigned frameNo = 0;
 	bool needRecenter = true;
 	bool haveOrigin = false;
 	float originPos[3] = {0, 0, 0};
@@ -226,6 +228,16 @@ void pollEvents()
 } // namespace
 
 extern "C" {
+
+int xr_trace(void) { return g.frameNo < 30 || g.frameNo % 300 == 0; }
+
+void xr_log(const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	__android_log_vprint(ANDROID_LOG_INFO, TAG, fmt, ap);
+	va_end(ap);
+}
 
 int xr_is_initialized(void) { return g.ok ? 1 : 0; }
 
@@ -392,13 +404,23 @@ int xr_frame_begin(void)
 	if (!g.ok) return 0;
 	if (g.frameBegun) return g.active ? 1 : 0;
 	pollEvents();
-	if (!g.running) return 0;
+	if (!g.running)
+	{
+		static unsigned notRunning = 0;
+		if (notRunning++ < 5 || notRunning % 300 == 0) LOGI("frame_begin: session not running (state %d)", (int)g.sessionState);
+		return 0;
+	}
 
+	const bool tr = xr_trace();
+	if (tr) LOGI("frame %u: xrWaitFrame", g.frameNo);
 	XrFrameWaitInfo wi = {XR_TYPE_FRAME_WAIT_INFO};
 	XrFrameState fs = {XR_TYPE_FRAME_STATE};
 	if (!check(xrWaitFrame(g.session, &wi, &fs), "xrWaitFrame")) return 0;
+	if (tr) LOGI("frame %u: xrWaitFrame done shouldRender=%d predictedDisplayTime=%lld period=%lld", g.frameNo,
+	             (int)fs.shouldRender, (long long)fs.predictedDisplayTime, (long long)fs.predictedDisplayPeriod);
 	XrFrameBeginInfo bi = {XR_TYPE_FRAME_BEGIN_INFO};
 	if (!check(xrBeginFrame(g.session, &bi), "xrBeginFrame")) return 0;
+	if (tr) LOGI("frame %u: xrBeginFrame ok", g.frameNo);
 
 	g.frameBegun = true;
 	g.shouldRender = fs.shouldRender == XR_TRUE;
@@ -406,7 +428,7 @@ int xr_frame_begin(void)
 	g.eyeDone[0] = g.eyeDone[1] = false;
 	g.uiDrawn = false;
 	g.active = false;
-	if (!g.shouldRender) return 0;
+	if (!g.shouldRender) { LOGW("frame %u: shouldRender=0, submitting an empty frame", g.frameNo); return 0; }
 
 	XrViewLocateInfo li = {XR_TYPE_VIEW_LOCATE_INFO};
 	li.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
@@ -416,7 +438,7 @@ int xr_frame_begin(void)
 	g.views[0] = g.views[1] = XrView{XR_TYPE_VIEW};
 	uint32_t cnt = 0;
 	if (!check(xrLocateViews(g.session, &li, &vs, 2, &cnt, g.views), "xrLocateViews") || cnt != 2) return 0;
-	if (!(vs.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT)) return 0;
+	if (!(vs.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT)) { LOGW("frame %u: view orientation not valid", g.frameNo); return 0; }
 
 	if (g.needRecenter || !g.haveOrigin)
 	{
@@ -549,7 +571,12 @@ int xr_frame_end(int uiWanted)
 	ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
 	ei.layerCount = nl;
 	ei.layers = layers;
-	check(xrEndFrame(g.session, &ei), "xrEndFrame");
+	XrResult er = xrEndFrame(g.session, &ei);
+	check(er, "xrEndFrame");
+	if (xr_trace())
+		LOGI("frame %u: xrEndFrame result=%d layerCount=%u active=%d eyes=%d/%d ui=%d(wanted %d drawn %d)", g.frameNo, (int)er, nl,
+		     (int)g.active, (int)g.eyeDone[0], (int)g.eyeDone[1], (int)showUi, uiWanted, (int)g.uiDrawn);
+	g.frameNo++;
 
 	g.frameBegun = false;
 	g.active = false;
