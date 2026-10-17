@@ -182,3 +182,33 @@ index 08f8a66..60e0920 100644
  
  	signal(SIGINT, SignalHandler);
  	signal(SIGTERM, SignalHandler);
+diff --git a/src/common/textures/animtexture.cpp b/src/common/textures/animtexture.cpp
+index ae9d8f5..c52e303 100644
+--- a/src/common/textures/animtexture.cpp
++++ b/src/common/textures/animtexture.cpp
+@@ -25,7 +25,9 @@
+ #include "bitmap.h"
+ #include "texturemanager.h"
+ 
++#ifndef NO_LIBVPX
+ #include "vpx/vpx_image.h"
++#endif
+ 
+ 
+ //==========================================================================
+@@ -76,6 +78,7 @@ void AnimTexture::SetFrame(const uint8_t* Palette, const void* data_)
+ 				dpix += 4;
+ 			}
+ 		}
++#ifndef NO_LIBVPX
+ 		else if(pixelformat == VPX)
+ 		{
+ 			const vpx_image_t *img = reinterpret_cast<const vpx_image_t *>(data_);
+@@ -154,6 +157,7 @@ void AnimTexture::SetFrame(const uint8_t* Palette, const void* data_)
+ 				}
+ 			}
+ 		}
++#endif // NO_LIBVPX
+ 		else if(pixelformat == RGB)
+ 		{
+ 			const uint8_t *img = reinterpret_cast<const uint8_t *>(data_);
