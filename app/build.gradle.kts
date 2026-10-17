@@ -11,7 +11,7 @@ android {
     namespace = "io.github.elmepox.doomxr"
     compileSdk = 36
     // r28+ links with 16 KB page alignment by default.
-    ndkVersion = "30.0.14904198"
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "io.github.elmepox.doomxr"
@@ -28,7 +28,6 @@ android {
             cmake {
                 arguments += listOf(
                     "-DANDROID_STL=c++_shared",
-                    "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
                     "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON",
                     "-DDOOMXR_SDL_DIR=${sdlDir.asFile.absolutePath}",
                     "-DDOOMXR_ASSET_DIR=${generatedAssets.get().asFile.absolutePath}",
@@ -54,7 +53,7 @@ android {
             // The engine is built straight from its own CMake project; our hook file
             // (uzdoom_hook.cmake) adds SDL2 and the host tools to it.
             path = uzdoomDir.file("CMakeLists.txt").asFile
-            version = "4.1.2"
+            version = "3.31.6"
         }
     }
 
