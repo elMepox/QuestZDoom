@@ -55,8 +55,32 @@ public class DoomXRActivity extends SDLActivity {
             args.add("-iwad");
             args.add("freedoom2.wad");
         }
+        addTestArguments(args);
         Log.i(TAG, "engine arguments: " + args);
         return args.toArray(new String[0]);
+    }
+
+    /**
+     * Extra engine arguments for testing without controllers:
+     *   adb shell am start -n io.github.elmepox.doomxr/.DoomXRActivity --es doomxr_args "+map map01"
+     * or a one-line file launch-args.txt in the external files dir. Whitespace separated.
+     */
+    private void addTestArguments(java.util.List<String> args) {
+        try {
+            String extra = getIntent() != null ? getIntent().getStringExtra("doomxr_args") : null;
+            File userDir = getExternalFilesDir(null);
+            File flag = userDir != null ? new File(userDir, "launch-args.txt") : null;
+            if ((extra == null || extra.trim().isEmpty()) && flag != null && flag.isFile()) {
+                extra = new String(java.nio.file.Files.readAllBytes(flag.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+            }
+            if (extra == null) return;
+            for (String a : extra.trim().split("\\s+")) {
+                if (!a.isEmpty()) args.add(a);
+            }
+            Log.i(TAG, "test arguments: " + extra.trim());
+        } catch (Exception e) {
+            Log.w(TAG, "could not read test arguments", e);
+        }
     }
 
     private static final String[] KNOWN_IWADS = {

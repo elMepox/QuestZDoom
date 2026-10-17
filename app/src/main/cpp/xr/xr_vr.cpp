@@ -480,6 +480,19 @@ int xr_frame_begin(void)
 		LOGI("recentered: yaw %.1f deg", g.originYaw * kRad2Deg);
 	}
 	g.active = true;
+
+	// Once a second: head pose in Doom conventions, to compare with how the user actually moves.
+	{
+		static XrTime lastLog = 0;
+		if (g.displayTime - lastLog > 1000000000LL)
+		{
+			lastLog = g.displayTime;
+			DoomXrEyeView h;
+			if (xr_get_eye_view(0, &h))
+				LOGI("head: yaw=%.1f pitch=%.1f roll=%.1f (deg, left eye) pos fwd=%.2f right=%.2f up=%.2f m, valid=%d, fovtan L%.2f R%.2f U%.2f D%.2f",
+				     h.yaw, h.pitch, h.roll, h.forward, h.right, h.up, (int)poseValid, h.tanLeft, h.tanRight, h.tanUp, h.tanDown);
+		}
+	}
 	return 1;
 }
 
