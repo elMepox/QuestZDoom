@@ -66,6 +66,8 @@ struct State
 	bool uiDrawn = false;
 	XrTime displayTime = 0;
 	XrView views[2];
+	XrView lastViews[2];
+	bool haveLastViews = false;
 
 	// recentering
 	unsigned frameNo = 0;
@@ -435,12 +437,40 @@ int xr_frame_begin(void)
 	li.displayTime = g.displayTime;
 	li.space = g.space;
 	XrViewState vs = {XR_TYPE_VIEW_STATE};
-	g.views[0] = g.views[1] = XrView{XR_TYPE_VIEW};
+	XrView located[2] = {{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
 	uint32_t cnt = 0;
-	if (!check(xrLocateViews(g.session, &li, &vs, 2, &cnt, g.views), "xrLocateViews") || cnt != 2) return 0;
-	if (!(vs.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT)) { LOGW("frame %u: view orientation not valid", g.frameNo); return 0; }
+	const bool locateOk = XR_SUCCEEDED(xrLocateViews(g.session, &li, &vs, 2, &cnt, located)) && cnt == 2;
+	const bool poseValid = locateOk && (vs.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT);
+	if (poseValid)
+	{
+		g.views[0] = located[0];
+		g.views[1] = located[1];
+		g.lastViews[0] = located[0];
+		g.lastViews[1] = located[1];
+		g.haveLastViews = true;
+	}
+	else
+	{
+		// Not worn / tracking not started yet: keep submitting frames from the last good (or an identity) pose so the
+		// compositor leaves the loading screen.
+		if (g.frameNo < 30 || g.frameNo % 300 == 0)
+			LOGW("frame %u: view pose not valid (locate=%d flags=0x%x), using %s", g.frameNo, (int)locateOk, (unsigned)vs.viewStateFlags,
+			     g.haveLastViews ? "last pose" : "identity");
+		for (int i = 0; i < 2; i++)
+		{
+			if (g.haveLastViews) g.views[i] = g.lastViews[i];
+			else
+			{
+				g.views[i] = XrView{XR_TYPE_VIEW};
+				g.views[i].pose.orientation.w = 1.f;
+				g.views[i].pose.position.x = i == 0 ? -0.032f : 0.032f;
+				g.views[i].fov = {-0.8f, 0.8f, 0.8f, -0.8f};
+			}
+			if (locateOk) g.views[i].fov = located[i].fov;
+		}
+	}
 
-	if (g.needRecenter || !g.haveOrigin)
+	if (poseValid && (g.needRecenter || !g.haveOrigin))
 	{
 		for (int i = 0; i < 3; i++)
 			g.originPos[i] = 0.5f * ((&g.views[0].pose.position.x)[i] + (&g.views[1].pose.position.x)[i]);
@@ -516,7 +546,7 @@ int xr_frame_end(int uiWanted)
 	if (!g.ok || !g.frameBegun) return 0;
 	release(g.ui);
 
-	bool showUi = uiWanted && g.uiDrawn && g.shouldRender && g.active;
+	bool showUi = uiWanted && g.uiDrawn && g.shouldRender;
 	if (showUi && !g.uiWasShown)
 	{
 		// Float the screen in front of the head, upright and facing the user.
@@ -564,6 +594,35 @@ int xr_frame_end(int uiWanted)
 		quad.pose = g.uiPose;
 		quad.size = {g.uiW, g.uiH};
 		layers[nl++] = (const XrCompositionLayerBaseHeader *)&quad;
+	}
+
+	if (nl == 0 && g.shouldRender && g.frameNo < 600)
+	{
+		// The compositor only leaves its loading screen once it receives a layer: show a black screen if nothing else.
+		if (GLuint fbo = acquire(g.ui))
+		{
+			GLint prev = 0;
+			glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev);
+			GLboolean sc = glIsEnabled(GL_SCISSOR_TEST);
+			glDisable(GL_SCISSOR_TEST);
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+			static const GLfloat black[4] = {0, 0, 0, 1};
+			glClearBufferfv(GL_COLOR, 0, black);
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev);
+			if (sc) glEnable(GL_SCISSOR_TEST);
+			release(g.ui);
+			showUi = true;
+			if (!g.uiWasShown) { g.uiH = 1.5f; g.uiW = g.uiH * (float)g.ui.width / (float)g.ui.height; g.uiPose = XrPosef{{0, 0, 0, 1}, {0, 0, -1.5f}}; }
+			g.uiWasShown = true;
+			quad.space = g.space;
+			quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+			quad.subImage.swapchain = g.ui.handle;
+			quad.subImage.imageRect.offset = {0, 0};
+			quad.subImage.imageRect.extent = {g.ui.width, g.ui.height};
+			quad.pose = g.uiPose;
+			quad.size = {g.uiW, g.uiH};
+			layers[nl++] = (const XrCompositionLayerBaseHeader *)&quad;
+		}
 	}
 
 	XrFrameEndInfo ei = {XR_TYPE_FRAME_END_INFO};

@@ -1,0 +1,182 @@
+diff --git a/src/d_main.cpp b/src/d_main.cpp
+index 4e2b865..205dad7 100644
+--- a/src/d_main.cpp
++++ b/src/d_main.cpp
+@@ -382,6 +382,35 @@ bool OkForLocalization(FTextureID texnum, const char* substitute);
+ 
+ void D_DoomLoop ();
+ 
++#ifdef __ANDROID__
++// --- DoomXR diagnostics: where is the main thread? A watchdog thread logs the last stage once per second. ---
++#include <thread>
++#include <chrono>
++const char * volatile g_doomxrStage = "startup";
++volatile unsigned g_doomxrLoopCount = 0;
++#define XRSTAGE(s) (g_doomxrStage = (s))
++#include "menustate.h"
++static struct DoomxrWatchdog
++{
++	DoomxrWatchdog()
++	{
++		std::thread([]() {
++			unsigned last = 0;
++			for (;;)
++			{
++				std::this_thread::sleep_for(std::chrono::seconds(1));
++				const unsigned now = g_doomxrLoopCount;
++				__android_log_print(ANDROID_LOG_INFO, "DoomXR-XR", "heartbeat: stage=%s loops=%u (+%u) gametic=%d gamestate=%d menuactive=%d tic=%d",
++				                    g_doomxrStage, now, now - last, gametic, (int)gamestate, (int)menuactive, I_GetTime());
++				last = now;
++			}
++		}).detach();
++	}
++} s_doomxrWatchdog;
++#else
++#define XRSTAGE(s) ((void)0)
++#endif
++
+ // EXTERNAL DATA DECLARATIONS ----------------------------------------------
+ 
+ EXTERN_CVAR (Float, turbo)
+@@ -1246,12 +1275,16 @@ void D_Display ()
+ 	int wipe_type;
+ 	sector_t *viewsec;
+ 
++	XRSTAGE("D_Display:entry");
+ 	GC::CheckGC();
+ 
+ 	SetDeltaTime();
+ 
+ 	if (nodrawers || screen == NULL)
++	{
++		XRSTAGE("D_Display:return(nodrawers/screen null)");
+ 		return; 				// for comparative timing / profiling
++	}
+ 
+ #ifdef __ANDROID__
+ 	// SDL focus events are meaningless on a headset (the window is never "focused"); the OpenXR session decides.
+@@ -1602,11 +1635,19 @@ void D_DoomLoop ()
+ 			}
+ 			I_SetFrameTime();
+ 
++			XRSTAGE("loop:TryRunTics");
++#ifdef __ANDROID__
++			g_doomxrLoopCount++;
++#endif
+ 			TryRunTics (); // will run at least one tic
+ 			// Update display, next frame, with current state.
++			XRSTAGE("loop:I_StartTic");
+ 			I_StartTic ();
++			XRSTAGE("loop:D_ProcessEvents");
+ 			D_ProcessEvents();
++			XRSTAGE("loop:D_Display");
+ 			D_Display ();
++			XRSTAGE("loop:S_UpdateMusic");
+ 			S_UpdateMusic();
+ 
+ 			if (gameloop_abort)
+@@ -3986,6 +4027,7 @@ static int D_InitGame(const FIWADInfo* iwad_info, std::vector<FileSys::ResourceN
+ 
+ 		S_Sound(CHAN_BODY, CHANF_UI|(haptics_do_menus?CHANF_RUMBLE:CHANF_NORUMBLE), "misc/startupdone", 1, ATTN_NONE);
+ 		if (!batchrun) Printf ("Init complete.\n");
++		XRSTAGE("init:after Init complete");
+ 
+ 		StartWindow->Progress(max_progress);
+ 		if (StartScreen)
+@@ -3998,17 +4040,21 @@ static int D_InitGame(const FIWADInfo* iwad_info, std::vector<FileSys::ResourceN
+ 			StartScreen = NULL;
+ 		}
+ 
++		XRSTAGE("init:CompileNextShader");
+ 		while(!screen->CompileNextShader())
+ 		{
+ 			// here we can do some visual updates later
+ 		}
++		XRSTAGE("init:after startscreen");
+ 		twod->fullscreenautoaspect = gameinfo.fullscreenautoaspect;
+ 		// Initialize the size of the 2D drawer so that an attempt to access it outside the draw code won't crash.
+ 		twod->Begin(screen->GetWidth(), screen->GetHeight());
+ 		twod->End();
+ 		UpdateJoystickMenu(NULL);
++		XRSTAGE("init:UpdateVRModes/Local_Job_Init");
+ 		UpdateVRModes();
+ 		Local_Job_Init();
++		XRSTAGE("init:intro/title");
+ 
+ 		v = Args->CheckValue (FArg_loadgame);
+ 		if (v)
+@@ -4086,7 +4132,9 @@ static int D_InitGame(const FIWADInfo* iwad_info, std::vector<FileSys::ResourceN
+ 		setmodeneeded = false;			// This may be set to true here, but isn't needed for a restart
+ 	}
+ 
++	XRSTAGE("init:OnEngineInitialize");
+ 	staticEventManager.OnEngineInitialize();
++	XRSTAGE("init:done");
+ 	return 0;
+ }
+ 
+@@ -4335,6 +4383,7 @@ static int D_DoomMain_Internal (void)
+ 			debugServer->Listen(debug_port);
+ 		}
+ 
++		XRSTAGE("entering D_DoomLoop");
+ 		D_DoomLoop ();		// this only returns if a 'restart' CCMD is given.
+ 		//
+ 		// Clean up after a restart
+diff --git a/src/d_net.cpp b/src/d_net.cpp
+index eb72244..68e37a7 100644
+--- a/src/d_net.cpp
++++ b/src/d_net.cpp
+@@ -2187,8 +2187,16 @@ static void CalculateNetStabilityBuffer(int diff)
+ //
+ // TryRunTics
+ //
++#ifdef __ANDROID__
++extern const char * volatile g_doomxrStage;
++#define XRSTAGE(s) (g_doomxrStage = (s))
++#else
++#define XRSTAGE(s) ((void)0)
++#endif
++
+ void TryRunTics()
+ {
++	XRSTAGE("TryRunTics:entry");
+ 	GC::CheckGC();
+ 
+ 	if (ToggleFullscreen)
+@@ -2204,6 +2212,7 @@ void TryRunTics()
+ 		doWait = true;
+ 
+ 	// Get the full number of tics the client can run.
++	XRSTAGE(doWait ? "TryRunTics:I_WaitForTic" : "TryRunTics:I_GetTime");
+ 	if (doWait)
+ 		EnterTic = I_WaitForTic(LastEnterTic);
+ 	else
+@@ -2218,7 +2227,9 @@ void TryRunTics()
+ 	// needed for singleplayer! But is instead handled entirely through local
+ 	// buffers. This has a limit of one seconds worth of commands that can be
+ 	// generated in advanced from the last time the game updated.
++	XRSTAGE("TryRunTics:NetUpdate");
+ 	NetUpdate(totalTics);
++	XRSTAGE("TryRunTics:after NetUpdate");
+ 
+ 	LastEnterTic = EnterTic;
+ 
+@@ -2272,6 +2283,7 @@ void TryRunTics()
+ 		// If we're in between a tic, try and balance things out.
+ 		if (totalTics <= 0)
+ 		{
++			XRSTAGE("TryRunTics:TicStabilityWait");
+ 			TicStabilityWait();
+ 		}
+ 		else
+@@ -2320,7 +2332,9 @@ void TryRunTics()
+ 		if (advancedemo)
+ 			D_DoAdvanceDemo();
+ 
++		XRSTAGE("TryRunTics:G_Ticker");
+ 		G_Ticker();
++		XRSTAGE("TryRunTics:MakeConsistencies");
+ 		MakeConsistencies();
+ 		++gametic;
+ 
