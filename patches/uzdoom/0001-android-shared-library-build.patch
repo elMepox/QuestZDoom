@@ -1,3 +1,66 @@
+diff --git a/libraries/ZMusic/source/CMakeLists.txt b/libraries/ZMusic/source/CMakeLists.txt
+index a346919..dff4725 100644
+--- a/libraries/ZMusic/source/CMakeLists.txt
++++ b/libraries/ZMusic/source/CMakeLists.txt
+@@ -4,6 +4,14 @@
+ # interface.
+ 
+ add_library(zmusic-obj INTERFACE)
++if(ANDROID)
++	# FluidSynth needs GLib, which is unavailable on Android: use a stub device factory.
++	target_sources(zmusic-obj INTERFACE mididevices/music_fluidsynth_stub.cpp)
++	set(ZMUSIC_FLUIDSYNTH_LIB)
++else()
++	target_sources(zmusic-obj INTERFACE mididevices/music_fluidsynth_mididevice.cpp)
++	set(ZMUSIC_FLUIDSYNTH_LIB fluidsynth)
++endif()
+ target_sources(zmusic-obj
+ INTERFACE
+ 	loader/i_module.cpp
+@@ -12,7 +20,6 @@ INTERFACE
+ 	mididevices/music_opl_mididevice.cpp
+ 	mididevices/music_opnmidi_mididevice.cpp
+ 	mididevices/music_timiditypp_mididevice.cpp
+-	mididevices/music_fluidsynth_mididevice.cpp
+ 	mididevices/music_softsynth_mididevice.cpp
+ 	mididevices/music_timidity_mididevice.cpp
+ 	mididevices/music_wildmidi_mididevice.cpp
+@@ -164,8 +171,8 @@ use_fast_math(zmusiclite)
+ target_include_directories(zmusic INTERFACE $<INSTALL_INTERFACE:include> $<BUILD_INTERFACE:${ZMusic_SOURCE_DIR}/include> $<BUILD_INTERFACE:${ZMusic_SOURCE_DIR}/source/loader>)
+ target_include_directories(zmusiclite INTERFACE $<INSTALL_INTERFACE:include> $<BUILD_INTERFACE:${ZMusic_SOURCE_DIR}/include>)
+ 
+-target_link_libraries_hidden(zmusic zmusic-obj adl oplsynth opn timidity timidityplus wildmidi fluidsynth)
+-target_link_libraries_hidden(zmusiclite zmusic-obj fluidsynth)
++target_link_libraries_hidden(zmusic zmusic-obj adl oplsynth opn timidity timidityplus wildmidi ${ZMUSIC_FLUIDSYNTH_LIB})
++target_link_libraries_hidden(zmusiclite zmusic-obj ${ZMUSIC_FLUIDSYNTH_LIB})
+ 
+ target_compile_definitions(zmusic PUBLIC $<$<STREQUAL:$<TARGET_PROPERTY:zmusic,TYPE>,STATIC_LIBRARY>:ZMUSIC_STATIC>)
+ target_compile_definitions(zmusiclite PRIVATE ZMUSIC_LITE=1 PUBLIC $<$<STREQUAL:$<TARGET_PROPERTY:zmusiclite,TYPE>,STATIC_LIBRARY>:ZMUSIC_STATIC>)
+diff --git a/libraries/ZMusic/source/mididevices/music_fluidsynth_stub.cpp b/libraries/ZMusic/source/mididevices/music_fluidsynth_stub.cpp
+new file mode 100644
+index 0000000..61ed5f6
+--- /dev/null
++++ b/libraries/ZMusic/source/mididevices/music_fluidsynth_stub.cpp
+@@ -0,0 +1,7 @@
++// FluidSynth needs GLib, which is unavailable on Android: report "no device" instead.
++#include "mididevice.h"
++
++MIDIDevice *CreateFluidSynthMIDIDevice(int samplerate, const char *Args)
++{
++	return nullptr;
++}
+diff --git a/libraries/ZMusic/thirdparty/CMakeLists.txt b/libraries/ZMusic/thirdparty/CMakeLists.txt
+index dd791db..6554f2d 100644
+--- a/libraries/ZMusic/thirdparty/CMakeLists.txt
++++ b/libraries/ZMusic/thirdparty/CMakeLists.txt
+@@ -28,4 +28,6 @@ add_subdirectory(timidityplus)
+ add_subdirectory(wildmidi)
+ add_subdirectory(oplsynth)
+ add_subdirectory(libxmp)
+-add_subdirectory(fluidsynth/src)
++if(NOT ANDROID) # FluidSynth needs GLib, which is not available on Android
++	add_subdirectory(fluidsynth/src)
++endif()
 diff --git a/libraries/ZWidget/CMakeLists.txt b/libraries/ZWidget/CMakeLists.txt
 index 2d73155..896e5af 100644
 --- a/libraries/ZWidget/CMakeLists.txt
@@ -12,10 +75,22 @@ index 2d73155..896e5af 100644
  	pkg_check_modules(DBUS dbus-1)
  	if (!DBUS_FOUND)
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 53beadc..8624f93 100644
+index 53beadc..030f756 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -456,6 +456,11 @@ else()
+@@ -338,7 +338,10 @@ if( MSVC AND NOT VPX_FOUND )
+ 	set( VPX_FOUND TRUE )
+ endif()
+ 
+-if( VPX_FOUND )
++if( ANDROID AND NOT VPX_FOUND )
++	message( STATUS "libvpx not available on Android: VP8/VP9 movie playback disabled" )
++	add_definitions( "-DNO_LIBVPX=1" )
++elseif( VPX_FOUND )
+ 	add_definitions( "-DUSE_LIBVPX=1" )
+ 	include_directories( SYSTEM "${VPX_INCLUDE_DIR}" )
+ 	set( PROJECT_LIBRARIES ${PROJECT_LIBRARIES} ${VPX_LIBRARIES} )
+@@ -456,6 +459,11 @@ else()
  	if ( SYSTEMINSTALL )
  		add_definitions( -DPROGDIR="${CMAKE_INSTALL_PREFIX}/${INSTALL_PK3_PATH}" )
  	endif()
@@ -27,7 +102,7 @@ index 53beadc..8624f93 100644
  endif()
  
  if( HAVE_MMX )
-@@ -1275,7 +1280,12 @@ set( GAME_SOURCES
+@@ -1275,7 +1283,12 @@ set( GAME_SOURCES
  set( GAME_NONPCH_SOURCES ${GAME_SOURCES} )
  list( REMOVE_ITEM GAME_NONPCH_SOURCES ${PCH_SOURCES} )
  
@@ -41,6 +116,53 @@ index 53beadc..8624f93 100644
  
  target_include_directories( zdoom PRIVATE ${CMAKE_BINARY_DIR} )
  
+diff --git a/src/common/cutscenes/movieplayer.cpp b/src/common/cutscenes/movieplayer.cpp
+index bdf5edd..f7070e8 100644
+--- a/src/common/cutscenes/movieplayer.cpp
++++ b/src/common/cutscenes/movieplayer.cpp
+@@ -32,8 +32,10 @@
+ #include "gamestate.h"
+ #include "SmackerDecoder.h"
+ #include "playmve.h"
++#ifndef NO_LIBVPX
+ #include <vpx/vpx_decoder.h>
+ #include <vpx/vp8dx.h>
++#endif
+ #include "filesystem.h"
+ #include "vm.h"
+ #include "printf.h"
+@@ -299,6 +301,7 @@ public:
+ //
+ //---------------------------------------------------------------------------
+ 
++#ifndef NO_LIBVPX
+ class VpxPlayer : public MoviePlayer
+ {
+ 	bool failed = false;
+@@ -636,6 +639,7 @@ struct AudioData
+ 	int nWrite = 0;
+ 	int nRead = 0;
+ };
++#endif // NO_LIBVPX
+ 
+ class SmkPlayer : public MoviePlayer
+ {
+@@ -893,6 +897,7 @@ MoviePlayer* OpenMovie(const char* filename, TArray<int>& ans, const int* framet
+ 		}
+ 		return anm;
+ 	}
++#ifndef NO_LIBVPX
+ 	else if (!memcmp(id, "DKIF\0\0 \0VP80", 12) || !memcmp(id, "DKIF\0\0 \0VP90", 12))
+ 	{
+ 		auto anm = new VpxPlayer(fr, ans, frameticks ? frameticks[1] : 0, flags, error);
+@@ -907,6 +912,7 @@ MoviePlayer* OpenMovie(const char* filename, TArray<int>& ans, const int* framet
+ 		anm->soundtrack = fileSystem.FindFileWithExtensions(name.GetChars(), knownSoundExts, countof(knownSoundExts));
+ 		return anm;
+ 	}
++#endif // NO_LIBVPX
+ 	// add more formats here.
+ 	else
+ 	{
 diff --git a/src/common/platform/posix/sdl/i_main.cpp b/src/common/platform/posix/sdl/i_main.cpp
 index 08f8a66..60e0920 100644
 --- a/src/common/platform/posix/sdl/i_main.cpp
