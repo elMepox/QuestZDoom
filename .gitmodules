@@ -1,4 +1,6 @@
-[submodule "gzdoom"]
-	path = Projects/Android/jni/gzdoom-g3.3mgw_mobile
-	url = https://github.com/DrBeef/gzdoom.git
-	branch = questzdoom
+[submodule "external/UZDoom"]
+	path = external/UZDoom
+	url = https://github.com/UZDoom/UZDoom.git
+[submodule "external/SDL"]
+	path = external/SDL
+	url = https://github.com/libsdl-org/SDL.git

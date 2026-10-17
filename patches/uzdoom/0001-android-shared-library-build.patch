@@ -1,0 +1,62 @@
+diff --git a/libraries/ZWidget/CMakeLists.txt b/libraries/ZWidget/CMakeLists.txt
+index 2d73155..896e5af 100644
+--- a/libraries/ZWidget/CMakeLists.txt
++++ b/libraries/ZWidget/CMakeLists.txt
+@@ -1,7 +1,7 @@
+ cmake_minimum_required(VERSION 3.11)
+ project(zwidget)
+ 
+-if (UNIX AND NOT APPLE)
++if (UNIX AND NOT APPLE AND NOT ANDROID)
+ 	include(FindPkgConfig)
+ 	pkg_check_modules(DBUS dbus-1)
+ 	if (!DBUS_FOUND)
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 53beadc..8624f93 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -456,6 +456,11 @@ else()
+ 	if ( SYSTEMINSTALL )
+ 		add_definitions( -DPROGDIR="${CMAKE_INSTALL_PREFIX}/${INSTALL_PK3_PATH}" )
+ 	endif()
++
++	if( ANDROID )
++		# The crash catcher relies on glibc-only facilities; Android has its own tombstones.
++		list( REMOVE_ITEM SYSTEM_SOURCES common/platform/posix/sdl/crashcatcher.c )
++	endif()
+ endif()
+ 
+ if( HAVE_MMX )
+@@ -1275,7 +1280,12 @@ set( GAME_SOURCES
+ set( GAME_NONPCH_SOURCES ${GAME_SOURCES} )
+ list( REMOVE_ITEM GAME_NONPCH_SOURCES ${PCH_SOURCES} )
+ 
+-add_executable( zdoom MACOSX_BUNDLE ${GAME_SOURCES} )
++if( ANDROID )
++	# Android loads the game as a shared library (SDL's SDLActivity dlopen()s libmain.so and calls SDL_main)
++	add_library( zdoom SHARED ${GAME_SOURCES} )
++else()
++	add_executable( zdoom MACOSX_BUNDLE ${GAME_SOURCES} )
++endif()
+ 
+ target_include_directories( zdoom PRIVATE ${CMAKE_BINARY_DIR} )
+ 
+diff --git a/src/common/platform/posix/sdl/i_main.cpp b/src/common/platform/posix/sdl/i_main.cpp
+index 08f8a66..60e0920 100644
+--- a/src/common/platform/posix/sdl/i_main.cpp
++++ b/src/common/platform/posix/sdl/i_main.cpp
+@@ -180,12 +180,12 @@ void I_StartupJoysticks();
+ 
+ int main (int argc, char **argv)
+ {
+-#if !defined (__APPLE__)
++#if !defined (__APPLE__) && !defined (__ANDROID__)
+ 	{
+ 		int s[4] = { SIGSEGV, SIGILL, SIGFPE, SIGBUS };
+ 		cc_install_handlers(argc, argv, 4, s, GAMENAMELOWERCASE "-crash.log", GetCrashInfo);
+ 	}
+-#endif // !__APPLE__
++#endif // !__APPLE__ && !__ANDROID__
+ 
+ 	signal(SIGINT, SignalHandler);
+ 	signal(SIGTERM, SignalHandler);
