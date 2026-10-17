@@ -23,10 +23,10 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
-
       - name: Install SDK components
         run: |
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$(ls -d $ANDROID_HOME/cmdline-tools/*/bin | head -1):$PATH"
+          yes | sdkmanager --licenses >/dev/null || true
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-36" \
