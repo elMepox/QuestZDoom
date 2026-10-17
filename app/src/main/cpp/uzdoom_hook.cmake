@@ -10,6 +10,18 @@ endif()
 
 set(_uz "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# --- 0. compiler cache -----------------------------------------------------------------------
+# Use ccache when it is installed so that a rebuild after a CMake re-configure or `clean` does not
+# recompile the whole engine. Opt out with -DDOOMXR_NO_CCACHE=ON.
+if(NOT DOOMXR_NO_CCACHE)
+  find_program(DOOMXR_CCACHE ccache)
+  if(DOOMXR_CCACHE)
+    message(STATUS "Using ccache: ${DOOMXR_CCACHE}")
+    set(CMAKE_C_COMPILER_LAUNCHER "${DOOMXR_CCACHE}")
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${DOOMXR_CCACHE}")
+  endif()
+endif()
+
 # --- 1. SDL2 ---------------------------------------------------------------------------------
 set(SDL_SHARED ON CACHE BOOL "" FORCE)
 set(SDL_STATIC OFF CACHE BOOL "" FORCE)
