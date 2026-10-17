@@ -47,12 +47,15 @@ public class DoomXRActivity extends SDLActivity {
         java.util.List<String> args = new java.util.ArrayList<>(java.util.Arrays.asList(
                 "+vid_preferbackend", "2", "+gl_es", "1",
                 // vr_mode 15 = OpenXR stereo; falls back to the flat window if OpenXR cannot start.
-                "+vr_mode", "15"));
+                "+vr_mode", "15",
+                // Desktop launcher / IWAD picker cannot work on Android.
+                "+queryiwad", "0"));
         // No commercial IWAD supplied by the user: fall back to the bundled Freedoom.
         if (!hasUserIwad()) {
             args.add("-iwad");
             args.add("freedoom2.wad");
         }
+        Log.i(TAG, "engine arguments: " + args);
         return args.toArray(new String[0]);
     }
 
@@ -93,28 +96,35 @@ public class DoomXRActivity extends SDLActivity {
         Os.setenv("DOOMWADDIR", userDir.getAbsolutePath(), true);
         Os.setenv("DOOMWADPATH", userDir.getAbsolutePath() + ":" + engineDir.getAbsolutePath(), true);
 
-        copyAssets(getAssets(), ASSET_ROOT, engineDir);
-        copyAssets(getAssets(), "freedoom", engineDir);
+        Log.i(TAG, "first-run setup: engineDir=" + engineDir + " userDir=" + userDir);
+        int[] stats = new int[2]; // copied, skipped
+        copyAssets(getAssets(), ASSET_ROOT, engineDir, stats);
+        copyAssets(getAssets(), "freedoom", engineDir, stats);
+        Log.i(TAG, "assets: " + stats[0] + " copied, " + stats[1] + " already up to date");
+        String[] present = engineDir.list();
+        Log.i(TAG, "engineDir now contains: " + (present == null ? "NOTHING (missing!)" : java.util.Arrays.toString(present)));
         Log.i(TAG, "Put IWADs into " + userDir.getAbsolutePath());
     }
 
     /** Recursively copies APK assets, skipping files that already match in size. */
-    private static void copyAssets(AssetManager am, String assetPath, File dest) throws IOException {
+    private static void copyAssets(AssetManager am, String assetPath, File dest, int[] stats) throws IOException {
         String[] children = am.list(assetPath);
         if (children != null && children.length > 0) {
             if (!dest.isDirectory() && !dest.mkdirs()) throw new IOException("mkdir " + dest);
             for (String child : children) {
-                copyAssets(am, assetPath + "/" + child, new File(dest, child));
+                copyAssets(am, assetPath + "/" + child, new File(dest, child), stats);
             }
             return;
         }
         try (InputStream in = am.open(assetPath)) {
-            if (dest.isFile() && dest.length() == in.available()) return;
+            if (dest.isFile() && dest.length() == in.available()) { stats[1]++; return; }
+            Log.i(TAG, "copy " + assetPath + " -> " + dest + " (" + in.available() + " bytes)");
             try (OutputStream out = new FileOutputStream(dest)) {
                 byte[] buf = new byte[64 * 1024];
                 int n;
                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
             }
+            stats[0]++;
         }
     }
 }
