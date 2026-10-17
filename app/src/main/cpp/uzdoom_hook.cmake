@@ -32,7 +32,7 @@ set(_host_bin "${CMAKE_BINARY_DIR}/host-tools")
 if(NOT EXISTS "${_host_bin}/ImportExecutables.cmake")
   message(STATUS "Building host tools (re2c, lemon, zipdir)")
   execute_process(
-    COMMAND ${CMAKE_COMMAND} -S "${DOOMXR_HOST_TOOLS_SRC}" -B "${_host_bin}" -G "Unix Makefiles"
+    COMMAND ${CMAKE_COMMAND} -S "${DOOMXR_HOST_TOOLS_SRC}" -B "${_host_bin}" -G Ninja -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM} -DCMAKE_POLICY_VERSION_MINIMUM=3.5
             -DUZDOOM_DIR=${_uz} -DCMAKE_BUILD_TYPE=Release
             -DCMAKE_C_COMPILER=cc -DCMAKE_CXX_COMPILER=c++
     RESULT_VARIABLE _rc)
