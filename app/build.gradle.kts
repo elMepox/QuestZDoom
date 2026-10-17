@@ -6,6 +6,9 @@ val uzdoomDir = rootProject.layout.projectDirectory.dir("external/UZDoom")
 val sdlDir = rootProject.layout.projectDirectory.dir("external/SDL")
 // Engine data (uzdoom.pk3, soundfonts, ...) produced by the native build, packaged as APK assets.
 val generatedAssets = layout.buildDirectory.dir("generated/uzdoom-assets")
+val openalDir = rootProject.layout.projectDirectory.dir("external/openal-soft")
+// Freedoom IWADs fetched by scripts/fetch-freedoom.sh (checksum-verified).
+val freedoomAssets = layout.buildDirectory.dir("generated/freedoom-assets")
 
 android {
     namespace = "io.github.elmepox.doomxr"
@@ -30,6 +33,7 @@ android {
                     "-DANDROID_STL=c++_shared",
                     "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON",
                     "-DDOOMXR_SDL_DIR=${sdlDir.asFile.absolutePath}",
+                    "-DDOOMXR_OPENAL_DIR=${openalDir.asFile.absolutePath}",
                     "-DDOOMXR_ASSET_DIR=${generatedAssets.get().asFile.absolutePath}",
                     "-DDOOMXR_HOST_TOOLS_SRC=${file("src/main/cpp/host-tools").absolutePath}",
                     "-DCMAKE_PROJECT_UZDoom_INCLUDE=${file("src/main/cpp/uzdoom_hook.cmake").absolutePath}",
@@ -93,6 +97,7 @@ androidComponents {
             sdlDir.dir("android-project/app/src/main/java").asFile.path)
         // Engine data written by the native build (see DOOMXR_ASSET_DIR).
         variant.sources.assets?.addStaticSourceDirectory(generatedAssets.get().asFile.path)
+        variant.sources.assets?.addStaticSourceDirectory(freedoomAssets.get().asFile.path)
     }
 }
 
@@ -105,6 +110,14 @@ val applyUzdoomPatches = tasks.register<Exec>("applyUzdoomPatches") {
     commandLine("bash", "scripts/apply-patches.sh")
 }
 
+val fetchFreedoom = tasks.register<Exec>("fetchFreedoom") {
+    group = "doomxr"
+    description = "Downloads Freedoom into the APK assets (skipped when already present)."
+    workingDir = rootProject.projectDir
+    val dest = freedoomAssets.get().asFile.resolve("freedoom")
+    commandLine("bash", "scripts/fetch-freedoom.sh", dest.absolutePath)
+}
+
 tasks.configureEach {
     if (name.startsWith("configureCMake") || name.startsWith("generateJsonModel")) {
         dependsOn(applyUzdoomPatches)
@@ -115,6 +128,7 @@ tasks.configureEach {
 afterEvaluate {
     listOf("Debug", "Release").forEach { variant ->
         tasks.matching { it.name == "merge${variant}Assets" }.configureEach {
+            dependsOn(fetchFreedoom)
             dependsOn("buildCMake${if (variant == "Debug") "Debug" else "RelWithDebInfo"}[arm64-v8a]")
         }
     }

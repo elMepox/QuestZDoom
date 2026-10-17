@@ -38,13 +38,36 @@ public class DoomXRActivity extends SDLActivity {
 
     @Override
     protected String[] getLibraries() {
-        return new String[] { "c++_shared", "SDL2", "main" };
+        return new String[] { "c++_shared", "SDL2", "openal", "main" };
     }
 
     @Override
     protected String[] getArguments() {
         // UZDoom's GLES renderer; Vulkan is not built in.
-        return new String[] { "+vid_preferbackend", "2", "+gl_es", "1" };
+        java.util.List<String> args = new java.util.ArrayList<>(java.util.Arrays.asList(
+                "+vid_preferbackend", "2", "+gl_es", "1"));
+        // No commercial IWAD supplied by the user: fall back to the bundled Freedoom.
+        if (!hasUserIwad()) {
+            args.add("-iwad");
+            args.add("freedoom2.wad");
+        }
+        return args.toArray(new String[0]);
+    }
+
+    private static final String[] KNOWN_IWADS = {
+        "doom.wad", "doom1.wad", "doomu.wad", "doom2.wad", "plutonia.wad", "tnt.wad",
+        "heretic.wad", "hexen.wad", "strife1.wad", "freedoom1.wad", "freedoom2.wad", "chex.wad"
+    };
+
+    private boolean hasUserIwad() {
+        File userDir = getExternalFilesDir(null);
+        if (userDir == null) userDir = getFilesDir();
+        String[] names = userDir.list();
+        if (names == null) return false;
+        for (String n : names) {
+            for (String k : KNOWN_IWADS) if (k.equalsIgnoreCase(n)) return true;
+        }
+        return false;
     }
 
     private void prepareEnvironment() throws IOException, ErrnoException {
@@ -62,9 +85,14 @@ public class DoomXRActivity extends SDLActivity {
         Os.setenv("XDG_DATA_HOME", dataHome.getAbsolutePath(), true);
         Os.setenv("XDG_CONFIG_HOME", configHome.getAbsolutePath(), true);
         Os.setenv("XDG_CACHE_HOME", cacheHome.getAbsolutePath(), true);
+        // The engine looks for uzdoom.pk3, soundfonts/ and fm_banks/ relative to "progdir", and for
+        // IWADs in DOOMWADDIR / DOOMWADPATH (user dir first, then the unpacked Freedoom).
+        Os.setenv("DOOMXR_PROGDIR", engineDir.getAbsolutePath(), true);
         Os.setenv("DOOMWADDIR", userDir.getAbsolutePath(), true);
+        Os.setenv("DOOMWADPATH", userDir.getAbsolutePath() + ":" + engineDir.getAbsolutePath(), true);
 
         copyAssets(getAssets(), ASSET_ROOT, engineDir);
+        copyAssets(getAssets(), "freedoom", engineDir);
         Log.i(TAG, "Put IWADs into " + userDir.getAbsolutePath());
     }
 

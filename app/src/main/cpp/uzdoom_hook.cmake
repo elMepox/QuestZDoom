@@ -48,17 +48,45 @@ if(NOT EXISTS "${_host_bin}/ImportExecutables.cmake")
 endif()
 set(IMPORT_EXECUTABLES "${_host_bin}/ImportExecutables.cmake" CACHE FILEPATH "" FORCE)
 
-# --- 3. assets for the APK -------------------------------------------------------------------------
+# --- 3. OpenAL Soft ---------------------------------------------------------------------------
+# UZDoom dlopen()s "libopenal.so" on Android (patched), so build it as a plain-named shared lib
+# and let DoomXRActivity System.loadLibrary("openal") before the engine starts.
+if(DOOMXR_OPENAL_DIR)
+  set(LIBTYPE SHARED CACHE STRING "" FORCE)
+  foreach(_o ALSOFT_UTILS ALSOFT_EXAMPLES ALSOFT_INSTALL ALSOFT_INSTALL_CONFIG ALSOFT_INSTALL_HRTF_DATA
+             ALSOFT_INSTALL_AMBDEC_PRESETS ALSOFT_INSTALL_EXAMPLES ALSOFT_INSTALL_UTILS ALSOFT_TESTS)
+    set(${_o} OFF CACHE BOOL "" FORCE)
+  endforeach()
+  set(ALSOFT_BACKEND_OBOE OFF CACHE BOOL "" FORCE)
+  set(ALSOFT_BACKEND_OPENSL ON CACHE BOOL "" FORCE)
+  set(ALSOFT_REQUIRE_OPENSL ON CACHE BOOL "" FORCE)
+  add_subdirectory("${DOOMXR_OPENAL_DIR}" "${CMAKE_BINARY_DIR}/openal")
+  # Android only packages lib*.so, so drop the versioned soname (libopenal.so.1.x).
+  set_target_properties(OpenAL PROPERTIES VERSION "" SOVERSION "")
+endif()
+
+# --- 4. assets for the APK -------------------------------------------------------------------------
 set(DOOMXR_HOOK_DIR "${CMAKE_CURRENT_LIST_DIR}" CACHE INTERNAL "")
-cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _doomxr_add_asset_target)
-function(_doomxr_add_asset_target)
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _doomxr_finish)
+function(_doomxr_finish)
+  if(TARGET OpenAL)
+    add_dependencies(zdoom OpenAL)
+  endif()
   if(NOT DOOMXR_ASSET_DIR)
     return()
   endif()
-  # zdoom's POST_BUILD step drops soundfonts/ and fm_banks/ next to the pk3s in ZDOOM_RESOURCE_DIR.
-  add_custom_target(doomxr_assets ALL
-    COMMAND ${CMAKE_COMMAND} -DSRC=${ZDOOM_RESOURCE_DIR} -DDST=${DOOMXR_ASSET_DIR}/uzdoom
-            -P ${DOOMXR_HOOK_DIR}/copy_assets.cmake
-    DEPENDS zdoom
+  # Gradle only asks ninja for the shared libraries, so the asset copy must be a dependency of zdoom.
+  # (It must not depend on zdoom itself: soundfonts/banks are taken straight from the source tree.)
+  set(_pk3_targets)
+  foreach(_t uzdoom_pk3 brightmaps_pk3 lights_pk3 game_support_pk3 game_widescreen_gfx_pk3)
+    if(TARGET ${_t})
+      list(APPEND _pk3_targets ${_t})
+    endif()
+  endforeach()
+  add_custom_target(doomxr_assets
+    COMMAND ${CMAKE_COMMAND} -DPK3_DIR=${ZDOOM_OUTPUT_DIR} -DUZDOOM_SRC=${CMAKE_SOURCE_DIR}
+            -DDST=${DOOMXR_ASSET_DIR}/uzdoom -P ${DOOMXR_HOOK_DIR}/copy_assets.cmake
+    DEPENDS ${_pk3_targets}
     VERBATIM)
+  add_dependencies(zdoom doomxr_assets)
 endfunction()

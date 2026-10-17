@@ -129,6 +129,20 @@ index 53beadc..638157d 100644
  else()
  	FILE( WRITE ${CMAKE_CURRENT_BINARY_DIR}/link-make "if [ ! -e ${ZDOOM_OUTPUT_DIR}/${ZDOOM_EXE_NAME} ]; then ln -sf ${CMAKE_CURRENT_BINARY_DIR}/${ZDOOM_EXE_NAME} ${ZDOOM_OUTPUT_DIR}/${ZDOOM_EXE_NAME}; fi" )
  	add_custom_command( TARGET zdoom POST_BUILD
+diff --git a/src/common/audio/sound/oalsound.cpp b/src/common/audio/sound/oalsound.cpp
+index 78b63f5..ca2ff32 100644
+--- a/src/common/audio/sound/oalsound.cpp
++++ b/src/common/audio/sound/oalsound.cpp
+@@ -71,7 +71,8 @@ CUSTOM_CVAR (Float, snd_superstereowidth, 0.45f, CVAR_ARCHIVE|CVAR_GLOBALCONFIG)
+ 
+ #ifdef _WIN32
+ #define OPENALLIB "soft_oal.dll"
+-#elif defined(__OpenBSD__)
++#elif defined(__OpenBSD__) || defined(__ANDROID__)
++// Android can only package lib*.so (no versioned sonames)
+ #define OPENALLIB "libopenal.so"
+ #else
+ #define OPENALLIB "libopenal.so.1"
 diff --git a/src/common/cutscenes/movieplayer.cpp b/src/common/cutscenes/movieplayer.cpp
 index bdf5edd..1abdea4 100644
 --- a/src/common/cutscenes/movieplayer.cpp
@@ -177,7 +191,7 @@ index bdf5edd..1abdea4 100644
  	else
  	{
 diff --git a/src/common/platform/posix/sdl/i_main.cpp b/src/common/platform/posix/sdl/i_main.cpp
-index 08f8a66..60e0920 100644
+index 08f8a66..28ff082 100644
 --- a/src/common/platform/posix/sdl/i_main.cpp
 +++ b/src/common/platform/posix/sdl/i_main.cpp
 @@ -180,12 +180,12 @@ void I_StartupJoysticks();
@@ -195,6 +209,21 @@ index 08f8a66..60e0920 100644
  
  	signal(SIGINT, SignalHandler);
  	signal(SIGTERM, SignalHandler);
+@@ -233,6 +233,14 @@ int main (int argc, char **argv)
+ 		progdir = "./";
+ 	}
+ #endif
++#ifdef __ANDROID__
++	// argv[0] is meaningless on Android; the Java side tells us where it unpacked the engine resources.
++	if (const char *pd = getenv("DOOMXR_PROGDIR"))
++	{
++		progdir = pd;
++		if (progdir.Len() == 0 || progdir[progdir.Len() - 1] != '/') progdir += "/";
++	}
++#endif
+ 
+ 	I_StartupJoysticks();
+ 
 diff --git a/src/common/textures/animtexture.cpp b/src/common/textures/animtexture.cpp
 index ae9d8f5..c52e303 100644
 --- a/src/common/textures/animtexture.cpp
