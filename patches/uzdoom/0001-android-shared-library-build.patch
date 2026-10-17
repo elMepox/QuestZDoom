@@ -38,12 +38,16 @@ index a346919..dff4725 100644
  target_compile_definitions(zmusiclite PRIVATE ZMUSIC_LITE=1 PUBLIC $<$<STREQUAL:$<TARGET_PROPERTY:zmusiclite,TYPE>,STATIC_LIBRARY>:ZMUSIC_STATIC>)
 diff --git a/libraries/ZMusic/source/mididevices/music_fluidsynth_stub.cpp b/libraries/ZMusic/source/mididevices/music_fluidsynth_stub.cpp
 new file mode 100644
-index 0000000..61ed5f6
+index 0000000..9517b06
 --- /dev/null
 +++ b/libraries/ZMusic/source/mididevices/music_fluidsynth_stub.cpp
-@@ -0,0 +1,7 @@
+@@ -0,0 +1,11 @@
 +// FluidSynth needs GLib, which is unavailable on Android: report "no device" instead.
 +#include "mididevice.h"
++#include "zmusic/midiconfig.h"
++
++// Settings object still referenced by zmusic/configuration.cpp.
++FluidConfig fluidConfig;
 +
 +MIDIDevice *CreateFluidSynthMIDIDevice(int samplerate, const char *Args)
 +{
