@@ -79,7 +79,12 @@ import java.util.Locale;
 	private boolean requestedManageExternalStorage = false;
 
 	public void shutdown() {
-		System.exit(0);
+		// Called from the native app thread when the engine has finished (or never started,
+		// e.g. no IWAD). System.exit() runs native static destructors while other threads are
+		// still alive, which ends in SIGABRT on current Horizon OS builds, so kill the process
+		// directly instead.
+		Log.v(APPLICATION, "shutdown() requested by native code, terminating process");
+		android.os.Process.killProcess(android.os.Process.myPid());
 	}
 
 	public void haptic_event(String event, int position, int intensity, float angle, float yHeight)  {
@@ -281,7 +286,12 @@ import java.util.Locale;
 		//If there are no IWADS, then should exit after creating the folders
 		//to allow the launcher app to do its thing, otherwise it would crash anyway
 		//Check that launcher is installed too
-        boolean hasIWADs = ((new File("/sdcard/QuestZDoom/wads").listFiles().length) > 0);
+		File[] wadFiles = new File("/sdcard/QuestZDoom/wads").listFiles(); // null if unreadable
+		boolean hasIWADs = wadFiles != null && wadFiles.length > 0;
+		if (!hasIWADs) {
+			Log.e(APPLICATION, "No IWAD found in /sdcard/QuestZDoom/wads (or folder unreadable) - " +
+					"copy a game WAD (e.g. freedoom1.wad) there. The app will exit now.");
+		}
 		//boolean hasLauncher = //(new File("/sdcard/QuestZDoom/no_launcher").exists()) || //Allow users to run without launcher if they _really_ want to
 		//		isPackageInstalled("com.Baggyg.QuestZDoom_Launcher", this.getPackageManager());
 		mNativeHandle = GLES3JNILib.onCreate( this, commandLineParams, hasIWADs, true );
