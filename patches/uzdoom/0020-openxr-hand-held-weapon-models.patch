@@ -196,7 +196,7 @@ index 6051a02e5a..0d918ced3f 100644
 +	xrHudModelToWorld = nullptr;
 +	lightmode = oldlightmode;
 +	state.EnableDepthTest(false);
-+	state.SetDepthMask(false);
++	state.SetDepthMask(true);	// leave it on: the next eye clears depth with glClear, which ignores the buffer while the mask is off
 +}
  #endif
  
