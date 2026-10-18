@@ -1,0 +1,115 @@
+diff --git a/src/common/platform/posix/sdl/i_input.cpp b/src/common/platform/posix/sdl/i_input.cpp
+index d2b62b6a3..c95850130 100644
+--- a/src/common/platform/posix/sdl/i_input.cpp
++++ b/src/common/platform/posix/sdl/i_input.cpp
+@@ -337,7 +337,11 @@ static void XRInputTick()
+ 		if (pressed(XRB_Y)) C_DoCommand("weapprev");
+ 		if (pressed(XRB_RTHUMB)) xr_recenter();
+ 		// Left stick click: aim laser; with the left grip held: dual wield.
+-		if (pressed(XRB_LTHUMB)) C_DoCommand(in.grip[0] > 0.5f ? "toggle vr_dual_wield" : "toggle vr_aim_laser");
++		if (pressed(XRB_LTHUMB)) {
++			extern void XrToggleOption(const char *cvarName, const char *label);
++			if (in.grip[0] > 0.5f) XrToggleOption("vr_dual_wield", "Dual wield");
++			else XrToggleOption("vr_aim_laser", "Aim laser");
++		}
+ 	}
+ 	XrHold(hAttack, inLevel && in.trigger[1] > 0.5f, "+attack", "-attack");
+ 	XrHold(hAlt, inLevel && in.trigger[0] > 0.5f && !vr_dual_wield, "+altattack", "-altattack");	// with dual wield the left trigger fires the left hand
+diff --git a/src/playsim/p_pspr.cpp b/src/playsim/p_pspr.cpp
+index c9ee183ce..b4dde9d29 100644
+--- a/src/playsim/p_pspr.cpp
++++ b/src/playsim/p_pspr.cpp
+@@ -142,7 +142,11 @@ void XrDualTick(player_t *p)
+ 	if (!XrDualActive(p) || (left != nullptr && left->GetCaller() != p->ReadyWeapon))
+ 	{
+ 		if (p->cheats & CF_PREDICTING) return;
+-		if (left != nullptr) left->Destroy();
++		if (left != nullptr)
++		{
++			left->Destroy();
++			__android_log_print(ANDROID_LOG_INFO, "DoomXR-XR", "dual wield: left weapon put away");
++		}
+ 		if (DPSprite *f = p->FindPSprite(PSP_LEFTFLASH)) f->Destroy();
+ 		return;
+ 	}
+@@ -154,6 +158,7 @@ void XrDualTick(player_t *p)
+ 		{
+ 			XrLeftCtx ctx(p, true);
+ 			P_SetPsprite(p, PSP_LEFT, right->GetState(), false);
++			__android_log_print(ANDROID_LOG_INFO, "DoomXR-XR", "dual wield: left weapon out");
+ 		}
+ 		return;
+ 	}
+@@ -161,6 +166,7 @@ void XrDualTick(player_t *p)
+ 	DoomXrInput in;
+ 	if (!xr_input_poll(&in) || in.trigger[0] <= 0.5f) return;
+ 	XrLeftCtx ctx(p, true);
++	__android_log_print(ANDROID_LOG_INFO, "DoomXR-XR", "dual wield: left shot");
+ 	p->refire = 0;
+ 	IFVIRTUALPTRNAME(p->mo, NAME_PlayerPawn, FireWeapon)
+ 	{
+@@ -173,19 +179,20 @@ void XrDualTick(player_t *p)
+ // adds spread and autoaim on top. Differences are in degrees, normalised to -180..180.
+ void XrLogShot(const char *what, AActor *m, DAngle angle, DAngle pitch)
+ {
+-	__android_log_print(ANDROID_LOG_INFO, "DoomXR-Aim", "%s: angle %.1f pitch %.1f (hand yaw %.1f pitch %.1f; d_yaw %.1f d_pitch %.1f) at %.0f,%.0f,%.0f",
+-	                    what, angle.Normalized180().Degrees(), pitch.Degrees(), m->Angles.Yaw.Normalized180().Degrees(), m->Angles.Pitch.Degrees(),
++	__android_log_print(ANDROID_LOG_INFO, "DoomXR-Aim", "%s %s: angle %.1f pitch %.1f (hand yaw %.1f pitch %.1f; d_yaw %.1f d_pitch %.1f) at %.0f,%.0f,%.0f",
++	                    g_xrLeftCtx ? "left" : "right", what, angle.Normalized180().Degrees(), pitch.Degrees(), m->Angles.Yaw.Normalized180().Degrees(), m->Angles.Pitch.Degrees(),
+ 	                    deltaangle(m->Angles.Yaw, angle).Degrees(), (pitch - m->Angles.Pitch).Degrees(), m->X(), m->Y(), m->Z());
+ }
+ 
+ CVAR(Bool, vr_aim_laser, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// debug: mark with small lights where the shots of the right hand go
+ 
+-// A dotted line from the hand to the point a hitscan from the hand would hit, drawn as short-lived world sprites. It is
+-// built inside the same XrAimScope as a shot, so it uses exactly the position and angles the weapon functions see.
+-void XrAimLaser(player_t *p)
++// A dotted line from each hand to the point a hitscan from the same pose would hit, drawn as short-lived world sprites:
++// yellow for the right hand, blue for the left one (while dual wield is on and the left weapon is out). Each line is
++// built inside the same XrAimScope as a shot of that hand, so it uses exactly the position and angles the weapon
++// functions see.
++static void XrAimLaserHand(player_t *p, int hand)
+ {
+-	if (!vr_aim_laser) return;
+-	XrAimScope aim(p);
++	XrAimScope aim(p, hand);
+ 	AActor *m = aim.mo;
+ 	if (m == nullptr) return;
+ 	static PClassActor *dot = PClass::FindActor("Candlestick");
+@@ -207,10 +214,36 @@ void XrAimLaser(player_t *p)
+ 		d->flags |= MF_NOGRAVITY;
+ 		d->Scale = DVector2(scale, scale);
+ 		d->tics = 2;	// gone after two tics: the next tic draws the line again
++		if (hand == 0)
++		{
++			d->RenderStyle = STYLE_Shaded;
++			d->SetShade(0x40A0FF);
++		}
+ 	};
+ 	for (int i = 1; i <= 10; i++) put(len * i / 11, 0.2);
+ 	put(len, 0.6);
+ }
++
++void XrAimLaser(player_t *p)
++{
++	if (!vr_aim_laser) return;
++	XrAimLaserHand(p, 1);
++	if (p->FindPSprite(PSP_LEFT) != nullptr) XrAimLaserHand(p, 0);
++}
++
++// Flips a bool option from the controller and says so: on the screen (mid-screen message) and in logcat.
++void XrToggleOption(const char *cvarName, const char *label)
++{
++	FBaseCVar *cv = FindCVar(cvarName, nullptr);
++	if (cv == nullptr) return;
++	UCVarValue v;
++	v.Bool = !cv->GetGenericRep(CVAR_Bool).Bool;
++	cv->SetGenericRep(v, CVAR_Bool);
++	FString msg;
++	msg.Format("%s: %s", label, v.Bool ? "ON" : "OFF");
++	__android_log_print(ANDROID_LOG_INFO, "DoomXR-XR", "%s (%s)", msg.GetChars(), cvarName);
++	C_MidPrint(SmallFont, msg.GetChars());
++}
+ #endif
+ 
+ 
