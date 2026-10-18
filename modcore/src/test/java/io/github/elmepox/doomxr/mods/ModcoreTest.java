@@ -80,6 +80,21 @@ class ModcoreTest {
     }
 
     @Test
+    void idgamesIndexParsesRealMirrorLines() throws Exception {
+        // Lines copied from youfailit.net/pub/idgames/ls-laR.gz
+        String real = "./levels/doom2/megawads:\ntotal 1\n"
+                + "-rw-rw-r-- 1 idgmaint idgames 969307 Jun 17  2024 100lnm.zip\n"
+                + "-rw-rw-r-- 1 idgmaint idgames  12999 Oct 17 01:05 1024abc.zip\n"
+                + "-rw-rw-r-- 1 idgmaint idgames   1000 Oct 17 01:05 1024abc.txt\n"
+                + "-rw-rw-r-- 1 fpv      idgames   2000 Jun 17  2014 .message\n"
+                + "drwxrwxr-x 2 idgmaint idgames   4096 Oct 17 01:05 incoming\n";
+        IdgamesIndex idx = IdgamesIndex.parse(new ByteArrayInputStream(real.getBytes(StandardCharsets.ISO_8859_1)));
+        assertEquals(2, idx.size());
+        assertEquals("levels/doom2/megawads", idx.search("100lnm", 5).get(0).dir);
+        assertEquals("Oct 17 01:05", idx.search("1024abc", 5).get(0).date);
+    }
+
+    @Test
     void idgamesIndexCachesAndFallsBackToStaleCache(@TempDir File dir) throws Exception {
         ByteArrayOutputStream gz = new ByteArrayOutputStream();
         try (java.util.zip.GZIPOutputStream z = new java.util.zip.GZIPOutputStream(gz)) {
