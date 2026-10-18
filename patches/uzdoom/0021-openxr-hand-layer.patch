@@ -1,0 +1,189 @@
+diff --git a/src/rendering/hwrenderer/scene/hw_weapon.cpp b/src/rendering/hwrenderer/scene/hw_weapon.cpp
+--- a/src/rendering/hwrenderer/scene/hw_weapon.cpp
++++ b/src/rendering/hwrenderer/scene/hw_weapon.cpp
+@@ -41,6 +41,9 @@
+ #include "hw_viewpointbuffer.h"
+ 
+ #include "vm.h"
++#ifdef DOOMXR_OPENXR
++#include "xr_hand_model.h"
++#endif
+ 
+ EXTERN_CVAR(Float, transsouls)
+ EXTERN_CVAR(Int, gl_fuzztype)
+@@ -133,6 +136,13 @@
+ CVAR(Bool, vr_weapon_roll, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// the weapon sprite follows the wrist roll (off: stays upright so it points where the shots go)
+ CVAR(Float, vr_weapon_model_scale, 1.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// size of a hand-held 3D weapon model (1 model unit = 1 meter at 1.0)
+ CVAR(Bool, vr_weapon_model_roll, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// a hand-held 3D weapon model follows the wrist roll too (off: stays upright)
++CVAR(Bool, vr_hand_model, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// draw a hand at each controller
++CVAR(Float, vr_hand_scale, 1.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// size of the hands
++CVAR(Float, vr_hand_offset_right, 0.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// palm position from the controller's aim pose, meters (right is mirrored for the left hand)
++CVAR(Float, vr_hand_offset_up, -0.05f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++CVAR(Float, vr_hand_offset_forward, -0.03f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++CVAR(Float, vr_hand_pitch, 0.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// tips the hand up (+) or down (-) from the controller's aim, degrees
++CVAR(Int, vr_hand_color, 0xD8A383, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// skin colour, 0xRRGGBB
+ CVAR(Float, vr_weapon_model_pitch, 0.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// tips a hand-held 3D weapon model up (+) or down (-) from the controller's aim, degrees
+ 
+ //==========================================================================
+@@ -149,8 +159,19 @@
+ {
+ 	if (xrHandValid) DrawXrHandSprites(state, xrHand, false);
+ 	if (xrHandLValid) DrawXrHandSprites(state, xrHandL, true);
++
++	// Weapon models and hands share one depth buffer, cleared once, so they hide each other correctly.
++	screen->mViewpoints->SetViewpoint(state, &VPUniforms);	// the eye's view and projection
++	state.SetDepthMask(true);	// glClear leaves the depth buffer alone while the depth mask is off
++	state.Clear(CT_Depth);
++	state.EnableMultisampling(false);
++	state.EnableFog(false);
+ 	if (xrHandValid) DrawXrHandModels(state, xrHand, false);
+ 	if (xrHandLValid) DrawXrHandModels(state, xrHandL, true);
++	if (xrHandValid) DrawXrHandModel(state, xrHand, false);
++	if (xrHandLValid) DrawXrHandModel(state, xrHandL, true);
++	state.EnableDepthTest(false);
++	state.SetDepthMask(true);	// leave it on: the next eye clears depth with glClear, which ignores the buffer while the mask is off
+ }
+ 
+ // The weapon layers of the left hand (dual wield) are PSP_LEFT and PSP_LEFTFLASH; everything else is the right hand's.
+@@ -278,12 +299,8 @@
+ 	VSMatrix handToWorld;
+ 	handToWorld.loadMatrix(m);
+ 
+-	screen->mViewpoints->SetViewpoint(state, &VPUniforms);	// the eye's view and projection
+-	state.SetDepthMask(true);	// glClear leaves the depth buffer alone while the depth mask is off
+-	state.Clear(CT_Depth);
++	screen->mViewpoints->SetViewpoint(state, &VPUniforms);
+ 	state.EnableDepthTest(true);
+-	state.EnableMultisampling(false);
+-	state.EnableFog(false);
+ 
+ 	auto oldlightmode = lightmode;
+ 	if (isSoftwareLighting(oldlightmode)) SetFallbackLightMode();
+@@ -305,8 +322,114 @@
+ 	screen->mBones->Unmap();
+ 	xrHudModelToWorld = nullptr;
+ 	lightmode = oldlightmode;
+-	state.EnableDepthTest(false);
+-	state.SetDepthMask(true);	// leave it on: the next eye clears depth with glClear, which ignores the buffer while the mask is off
++}
++
++//==========================================================================
++//
++// OpenXR: a hand at each controller, built from boxes (xr_hand_model.h) and posed by the trigger and the grip.
++//
++// The boxes are in the hand frame (meters; +x right, +y up, +z forward, origin at the middle of the palm), which
++// sits vr_hand_offset_* from the controller's aim pose and turns with the whole controller. Flat colour, shaded
++// per face by a fixed light from above and sorted into a few brightness steps so a handful of draw calls does it.
++//
++//==========================================================================
++
++void HWDrawInfo::DrawXrHandModel(FRenderState &state, const DoomXrHand &hand, bool left)
++{
++	if (!vr_hand_model) return;
++
++	DoomXrInput in;
++	float trigger = 0.f, grip = 0.f;
++	if (xr_input_poll(&in)) { trigger = in.trigger[left ? 0 : 1]; grip = in.grip[left ? 0 : 1]; }
++	XrHandBox boxes[XR_HAND_MAX_BOXES];
++	const int nb = xr_hand_boxes(left, 0.15f + 0.8f * trigger, 0.35f + 0.65f * grip, boxes, XR_HAND_MAX_BOXES);
++
++	const double stretch = Level->info->pixelstretch;
++	const double sh = vr_hunits_per_meter / stretch;
++	const double sv = sh / stretch;
++	const double k = vr_hand_scale;
++	// Hand frame in map space, with the offset applied to the origin and the pitch to the aim.
++	const double pitch = DAngle::fromDeg(vr_hand_pitch).Radians();
++	const double cp = cos(pitch), sp = sin(pitch);
++	const double F[3] = {hand.fx * cp + hand.ux * sp, hand.fy * cp + hand.uy * sp, hand.fz * cp + hand.uz * sp};
++	const double U[3] = {hand.ux * cp - hand.fx * sp, hand.uy * cp - hand.fy * sp, hand.uz * cp - hand.fz * sp};
++	const double R[3] = {hand.rx, hand.ry, hand.rz};
++	const double mir = left ? -1.0 : 1.0;
++	const double offR = vr_hand_offset_right * mir, offU = vr_hand_offset_up, offF = vr_hand_offset_forward;
++	const double O[3] = {hand.x + (R[0] * offR + U[0] * offU + F[0] * offF) * sh,
++						 hand.y + (R[1] * offR + U[1] * offU + F[1] * offF) * sh,
++						 hand.z + (R[2] * offR + U[2] * offU + F[2] * offF) * sv};
++
++	// Hand frame point (meters) -> render space (x, z, y).
++	auto toRender = [&](const double *p, float *o)
++	{
++		const double x = p[0] * k, y = p[1] * k, z = p[2] * k;
++		o[0] = (float)(O[0] + (R[0] * x + U[0] * y + F[0] * z) * sh);
++		o[1] = (float)(O[2] + (R[2] * x + U[2] * y + F[2] * z) * sv);
++		o[2] = (float)(O[1] + (R[1] * x + U[1] * y + F[1] * z) * sh);
++	};
++
++	enum { STEPS = 6, MAXV = XR_HAND_MAX_BOXES * 36 };
++	static float tris[STEPS][MAXV][3];
++	int counts[STEPS] = {};
++	for (int i = 0; i < nb; i++)
++	{
++		const XrHandBox &b = boxes[i];
++		for (int axis = 0; axis < 3; axis++)
++		for (int sign = -1; sign <= 1; sign += 2)
++		{
++			// The face on the sign side of this axis; its two other axes span the quad.
++			const int a1 = (axis + 1) % 3, a2 = (axis + 2) % 3;
++			double corner[4][3];
++			for (int c = 0; c < 4; c++)
++			{
++				const double s1 = (c == 0 || c == 3) ? -1 : 1, s2 = (c < 2) ? -1 : 1;
++				for (int d = 0; d < 3; d++)
++					corner[c][d] = b.c[d] + b.ax[axis][d] * b.h[axis] * sign + b.ax[a1][d] * b.h[a1] * s1 + b.ax[a2][d] * b.h[a2] * s2;
++			}
++			// Normal in map space for the light: hand-frame normal through R, U, F.
++			const double nh[3] = {b.ax[axis][0] * sign, b.ax[axis][1] * sign, b.ax[axis][2] * sign};
++			const double nz = R[2] * nh[0] + U[2] * nh[1] + F[2] * nh[2];
++			const double shade = 0.42 + 0.38 * (nz > 0 ? nz : 0) + 0.2 * (1.0 - fabs(nz));
++			int step = (int)(shade * (STEPS - 1) + 0.5);
++			step = step < 0 ? 0 : (step >= STEPS ? STEPS - 1 : step);
++			float *t = &tris[step][counts[step]][0];
++			static const int order[6] = {0, 1, 2, 0, 2, 3};
++			for (int q = 0; q < 6; q++) toRender(corner[order[q]], t + q * 3);
++			counts[step] += 6;
++		}
++	}
++
++	const PalEntry skin = PalEntry(vr_hand_color | 0xff000000);
++	state.EnableDepthTest(true);
++	state.SetCulling(Cull_None);
++	state.EnableTexture(false);
++	state.SetLightIndex(-1);
++	state.SetRenderStyle(DefaultRenderStyle());
++	state.SetObjectColor(0xffffffff);
++	state.SetAddColor(0);
++	state.SetDynLight(0, 0, 0);
++	state.AlphaFunc(Alpha_GEqual, 0.f);
++	int total = 0;
++	for (int i = 0; i < STEPS; i++) total += counts[i];
++	if (total > 0)
++	{
++		auto verts = screen->mVertexData->AllocVertices(total);
++		int at = 0;
++		for (int i = 0; i < STEPS; i++)
++		{
++			if (!counts[i]) continue;
++			for (int v = 0; v < counts[i]; v++, at++)
++				verts.first[at].Set(tris[i][v][0], tris[i][v][1], tris[i][v][2], 0.f, 0.f);
++			const float f = (float)(0.42 + 0.58 * i / (STEPS - 1));
++			state.SetColor(skin.r / 255.f * f, skin.g / 255.f * f, skin.b / 255.f * f, 1.f);
++			state.Draw(DT_Triangles, verts.second + at - counts[i], counts[i]);
++		}
++	}
++	state.EnableTexture(true);
++	state.AlphaFunc(Alpha_GEqual, gl_mask_sprite_threshold);
++	if (xr_trace())
++		xr_log("hand %s: %d box(es), %d vertices, trigger %.2f grip %.2f", left ? "left" : "right", nb, total, trigger, grip);
+ }
+ #endif
+ 
+diff --git a/src/rendering/hwrenderer/scene/hw_drawinfo.h b/src/rendering/hwrenderer/scene/hw_drawinfo.h
+--- a/src/rendering/hwrenderer/scene/hw_drawinfo.h
++++ b/src/rendering/hwrenderer/scene/hw_drawinfo.h
+@@ -182,6 +182,7 @@
+ 	void DrawXrPlayerSprites(FRenderState &state);
+ 	void DrawXrHandSprites(FRenderState &state, const DoomXrHand &hand, bool left);
+ 	void DrawXrHandModels(FRenderState &state, const DoomXrHand &hand, bool left);
++	void DrawXrHandModel(FRenderState &state, const DoomXrHand &hand, bool left);
+ 	const VSMatrix *xrHudModelToWorld = nullptr;	// hand frame for RenderHUDModel(), set while a hand-held model is drawn
+ #endif
+ 	//TArray<ACorona*> Coronas;

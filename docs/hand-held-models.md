@@ -27,3 +27,13 @@ The pistol should sit in the right hand with its barrel along the controller's a
 
 Patch 0020 applies on top of 0001-0013 and the touched files pass a clang syntax check. It has not been run in the
 headset: whether the model faces the right way, its size and whether GLES draws it correctly are still to confirm.
+
+## Hands
+
+Each controller also gets a hand built from boxes (`app/src/main/cpp/xr/xr_hand_model.h`, no assets). The trigger curls the
+index finger, the grip curls the other three and the thumb; at rest the hand is half closed, as if holding a weapon.
+Weapon models and hands share one depth buffer, so a pistol sits inside the fingers.
+
+Cvars (all saved): `vr_hand_model` (on/off), `vr_hand_scale`, `vr_hand_offset_right/up/forward` (palm position from the
+controller's aim pose, meters; right is mirrored for the left hand), `vr_hand_pitch` (degrees), `vr_hand_color` (0xRRGGBB).
+The offsets are a first guess and want tuning on the headset.
