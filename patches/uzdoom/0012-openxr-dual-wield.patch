@@ -1,0 +1,268 @@
+diff --git a/src/common/platform/posix/sdl/i_input.cpp b/src/common/platform/posix/sdl/i_input.cpp
+index 5722d6841..d2b62b6a3 100644
+--- a/src/common/platform/posix/sdl/i_input.cpp
++++ b/src/common/platform/posix/sdl/i_input.cpp
+@@ -241,6 +241,7 @@ static const TMap<SDL_Scancode, uint8_t> KeyScanToDIK(InitKeyScanMap());
+ 
+ #ifdef DOOMXR_OPENXR
+ // ---- OpenXR controllers -> engine input -------------------------------------------------------------------------
++EXTERN_CVAR(Bool, vr_dual_wield)
+ CVAR(Int, vr_turn_mode, 1, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)				// 0 = smooth, 1 = snap
+ CVAR(Float, vr_snap_turn_degrees, 30.f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
+ 
+@@ -335,10 +336,11 @@ static void XRInputTick()
+ 		if (pressed(XRB_B)) C_DoCommand("weapnext");
+ 		if (pressed(XRB_Y)) C_DoCommand("weapprev");
+ 		if (pressed(XRB_RTHUMB)) xr_recenter();
+-		if (pressed(XRB_LTHUMB)) C_DoCommand("toggle vr_aim_laser");
++		// Left stick click: aim laser; with the left grip held: dual wield.
++		if (pressed(XRB_LTHUMB)) C_DoCommand(in.grip[0] > 0.5f ? "toggle vr_dual_wield" : "toggle vr_aim_laser");
+ 	}
+ 	XrHold(hAttack, inLevel && in.trigger[1] > 0.5f, "+attack", "-attack");
+-	XrHold(hAlt, inLevel && in.trigger[0] > 0.5f, "+altattack", "-altattack");
++	XrHold(hAlt, inLevel && in.trigger[0] > 0.5f && !vr_dual_wield, "+altattack", "-altattack");	// with dual wield the left trigger fires the left hand
+ 	XrHold(hUse, inLevel && in.grip[1] > 0.5f, "+use", "-use");
+ 	XrHold(hSpeed, inLevel && in.grip[0] > 0.5f, "+speed", "-speed");
+ 	XrHold(hJump, inLevel && down(XRB_A), "+jump", "-jump");
+diff --git a/src/playsim/p_pspr.cpp b/src/playsim/p_pspr.cpp
+index 275cc6b53..c9ee183ce 100644
+--- a/src/playsim/p_pspr.cpp
++++ b/src/playsim/p_pspr.cpp
+@@ -48,6 +48,7 @@
+ #include <android/log.h>
+ #include "p_linetracedata.h"
+ #include <math.h>
++#include <string.h>
+ EXTERN_CVAR(Int, vr_mode)
+ EXTERN_CVAR(Bool, vr_hand_aim)
+ EXTERN_CVAR(Float, vr_hunits_per_meter)
+@@ -63,14 +64,14 @@ struct XrAimScope
+ 	DVector3 pos;
+ 	DAngle yaw, pitch;
+ 
+-	explicit XrAimScope(player_t *p)
++	explicit XrAimScope(player_t *p, int hand = 1)
+ 	{
+ 		if (vr_mode != 15 /*VR_OPENXR*/ || !vr_hand_aim || !xr_is_initialized() || netgame) return;
+ 		if (p == nullptr || p != &players[consoleplayer] || p->mo == nullptr || (p->cheats & CF_PREDICTING)) return;
+ 		AActor *m = p->mo;
+ 		const double stretch = m->Level->info->pixelstretch;
+ 		DoomXrHand h;
+-		if (!xr_get_hand(1, m->X(), m->Y(), p->viewz, m->Angles.Yaw.Degrees(), vr_hunits_per_meter / stretch, stretch, &h)) return;
++		if (!xr_get_hand(hand, m->X(), m->Y(), p->viewz, m->Angles.Yaw.Degrees(), vr_hunits_per_meter / stretch, stretch, &h)) return;
+ 		mo = m;
+ 		g_xrAimActive = true;
+ 		pos = m->Pos();
+@@ -92,6 +93,82 @@ struct XrAimScope
+ 	}
+ };
+ 
++bool g_xrLeftCtx = false;	// a left-hand weapon action runs: SetPsprite on the weapon layers goes to the left layers instead
++
++CVAR(Bool, vr_dual_wield, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// the left trigger fires a second copy of the weapon from the left hand
++
++static bool XrIsReadyState(const FState *st)
++{
++	return st != nullptr && st->ActionFunc != nullptr && strstr(st->ActionFunc->PrintableName, "A_WeaponReady") != nullptr;
++}
++
++// While the left layer's action functions run, the left trigger takes the place of the fire button, so A_ReFire and
++// friends behave as for the right hand (P_SetPsprite sends the layers they set to the left ones).
++struct XrLeftCtx
++{
++	player_t *p = nullptr;
++	int buttons = 0;
++	bool wasOn = false;
++
++	XrLeftCtx(player_t *pl, bool on)
++	{
++		if (!on) return;
++		p = pl;
++		wasOn = g_xrLeftCtx;	// the left layer's actions can start further left states
++		g_xrLeftCtx = true;
++		buttons = p->cmd.buttons;
++		DoomXrInput in;
++		const bool trig = xr_input_poll(&in) && in.trigger[0] > 0.5f;
++		p->cmd.buttons = (buttons & ~(BT_ATTACK | BT_ALTATTACK)) | (trig ? BT_ATTACK : 0);
++	}
++	~XrLeftCtx()
++	{
++		if (p == nullptr) return;
++		g_xrLeftCtx = wasOn;
++		p->cmd.buttons = buttons;
++	}
++};
++
++static bool XrDualActive(player_t *p)
++{
++	return vr_dual_wield && vr_mode == 15 /*VR_OPENXR*/ && xr_is_initialized() && !netgame && p == &players[consoleplayer] &&
++	       p->mo != nullptr && p->health > 0 && p->ReadyWeapon != nullptr && p->PendingWeapon == WP_NOCHANGE && !(p->cheats & CF_PREDICTING);
++}
++
++// Once per tic: keeps the left layer in step with the right-hand weapon and starts a left shot on the left trigger.
++void XrDualTick(player_t *p)
++{
++	DPSprite *left = p->FindPSprite(PSP_LEFT);
++	if (!XrDualActive(p) || (left != nullptr && left->GetCaller() != p->ReadyWeapon))
++	{
++		if (p->cheats & CF_PREDICTING) return;
++		if (left != nullptr) left->Destroy();
++		if (DPSprite *f = p->FindPSprite(PSP_LEFTFLASH)) f->Destroy();
++		return;
++	}
++	if (left == nullptr)
++	{
++		// Appear with the right hand's weapon once it is ready (not while it is being raised).
++		DPSprite *right = p->FindPSprite(PSP_WEAPON);
++		if (right != nullptr && XrIsReadyState(right->GetState()))
++		{
++			XrLeftCtx ctx(p, true);
++			P_SetPsprite(p, PSP_LEFT, right->GetState(), false);
++		}
++		return;
++	}
++	if (!XrIsReadyState(left->GetState())) return;	// still firing
++	DoomXrInput in;
++	if (!xr_input_poll(&in) || in.trigger[0] <= 0.5f) return;
++	XrLeftCtx ctx(p, true);
++	p->refire = 0;
++	IFVIRTUALPTRNAME(p->mo, NAME_PlayerPawn, FireWeapon)
++	{
++		VMValue params[2] = { p->mo, (FState *)nullptr };
++		VMCall(func, params, 2, nullptr, 0);
++	}
++}
++
+ // Logs the angles a weapon function really passes on: the hand pose is yaw/pitch of the scope (m->Angles), the shot
+ // adds spread and autoaim on top. Differences are in degrees, normalised to -180..180.
+ void XrLogShot(const char *what, AActor *m, DAngle angle, DAngle pitch)
+@@ -370,6 +447,13 @@ static DPSprite *P_CreatePsprite(player_t *player, AActor *caller, int layer)
+ void P_SetPsprite(player_t *player, PSPLayers id, FState *state, bool pending)
+ {
+ 	if (player == nullptr) return;
++#ifdef DOOMXR_OPENXR
++	if (g_xrLeftCtx)
++	{
++		if (id == PSP_WEAPON) id = PSP_LEFT;
++		else if (id == PSP_FLASH) id = PSP_LEFTFLASH;
++	}
++#endif
+ 	auto psp = player->GetPSprite(id);
+ 	if (psp) psp->SetState(state, pending);
+ }
+@@ -666,9 +750,14 @@ void DPSprite::SetState(FState *newstate, bool pending)
+ 				newstate->ActionFunc = nullptr;
+ 			}
+ #ifdef DOOMXR_OPENXR
+-			XrAimScope xrAim(Owner);
+-#endif
++			const bool xrLeft = ID == PSP_LEFT || ID == PSP_LEFTFLASH;
++			XrLeftCtx xrCtx(Owner, xrLeft);
++			XrAimScope xrAim(Owner, xrLeft ? 0 : 1);
++			// The left hand's ready frames only show the weapon: the right layer already does the weapon's housekeeping.
++			if (!(xrLeft && XrIsReadyState(newstate)) && newstate->CallAction(Owner->mo, Caller, &stp, &nextstate))
++#else
+ 			if (newstate->CallAction(Owner->mo, Caller, &stp, &nextstate))
++#endif
+ 			{
+ 				// It's possible this call resulted in this very layer being replaced.
+ 				if (ObjectFlags & OF_EuthanizeMe)
+diff --git a/src/playsim/p_pspr.h b/src/playsim/p_pspr.h
+index d1a135dd4..eac053486 100644
+--- a/src/playsim/p_pspr.h
++++ b/src/playsim/p_pspr.h
+@@ -45,6 +45,8 @@ enum PSPLayers
+ 	PSP_STRIFEHANDS = -1,
+ 	PSP_CALLERID = 0,
+ 	PSP_WEAPON = 1,
++	PSP_LEFT = 500,			// DoomXR: the weapon in the left hand (dual wield)
++	PSP_LEFTFLASH = 501,
+ 	PSP_FLASH = 1000,
+ 	PSP_TARGETCENTER = INT_MAX - 2,
+ 	PSP_TARGETLEFT,
+diff --git a/src/playsim/p_user.cpp b/src/playsim/p_user.cpp
+index 6c9d3ad09..5d58046bc 100644
+--- a/src/playsim/p_user.cpp
++++ b/src/playsim/p_user.cpp
+@@ -1705,7 +1705,9 @@ void P_PlayerThink (player_t *player)
+ #ifdef DOOMXR_OPENXR
+ 	{
+ 		extern void XrAimLaser(player_t *p);
++		extern void XrDualTick(player_t *p);
+ 		XrAimLaser(player);
++		XrDualTick(player);
+ 	}
+ #endif
+ 
+diff --git a/src/rendering/hwrenderer/hw_entrypoint.cpp b/src/rendering/hwrenderer/hw_entrypoint.cpp
+index 4e9926cd3..87fffa37c 100644
+--- a/src/rendering/hwrenderer/hw_entrypoint.cpp
++++ b/src/rendering/hwrenderer/hw_entrypoint.cpp
+@@ -188,6 +188,7 @@ sector_t* RenderViewpoint(FRenderViewpoint& mainvp, AActor* camera, IntRect* bou
+ 			const double baseYaw = vp.Angles.Yaw.Degrees();
+ 			// Right controller pose for the hand-held weapon (same mapping as the head position below).
+ 			di->xrHandValid = mainview && xr_get_hand(1, vp.Pos.X, vp.Pos.Y, vp.Pos.Z, baseYaw, scale, stretch, &di->xrHand) != 0;
++			di->xrHandLValid = mainview && xr_get_hand(0, vp.Pos.X, vp.Pos.Y, vp.Pos.Z, baseYaw, scale, stretch, &di->xrHandL) != 0;
+ 			const double cy = cos(DAngle::fromDeg(baseYaw).Radians()), sy = sin(DAngle::fromDeg(baseYaw).Radians());
+ 			vp.Pos.X += scale * (xrEye.forward * cy + xrEye.right * sy);
+ 			vp.Pos.Y += scale * (xrEye.forward * sy - xrEye.right * cy);
+diff --git a/src/rendering/hwrenderer/scene/hw_drawinfo.h b/src/rendering/hwrenderer/scene/hw_drawinfo.h
+index ce780c7c3..13c41b70f 100644
+--- a/src/rendering/hwrenderer/scene/hw_drawinfo.h
++++ b/src/rendering/hwrenderer/scene/hw_drawinfo.h
+@@ -177,7 +177,10 @@ struct HWDrawInfo
+ #ifdef DOOMXR_OPENXR
+ 	DoomXrHand xrHand = {};			// right controller pose in map space (OpenXR eyes only)
+ 	bool xrHandValid = false;
++	DoomXrHand xrHandL = {};		// left controller pose (dual wield)
++	bool xrHandLValid = false;
+ 	void DrawXrPlayerSprites(FRenderState &state);
++	void DrawXrHandSprites(FRenderState &state, const DoomXrHand &hand, bool left);
+ #endif
+ 	//TArray<ACorona*> Coronas;
+ 	uint64_t LastFrameTime = 0;
+diff --git a/src/rendering/hwrenderer/scene/hw_weapon.cpp b/src/rendering/hwrenderer/scene/hw_weapon.cpp
+index 48dc371b4..6051a02e5 100644
+--- a/src/rendering/hwrenderer/scene/hw_weapon.cpp
++++ b/src/rendering/hwrenderer/scene/hw_weapon.cpp
+@@ -143,10 +143,21 @@ CVAR(Bool, vr_weapon_roll, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// the weapo
+ 
+ void HWDrawInfo::DrawXrPlayerSprites(FRenderState &state)
+ {
+-	if (!xrHandValid) return;
++	if (xrHandValid) DrawXrHandSprites(state, xrHand, false);
++	if (xrHandLValid) DrawXrHandSprites(state, xrHandL, true);
++}
++
++// The weapon layers of the left hand (dual wield) are PSP_LEFT and PSP_LEFTFLASH; everything else is the right hand's.
++static bool XrIsLeftLayer(const HUDSprite &h)
++{
++	return h.weapon->GetID() == PSP_LEFT || h.weapon->GetID() == PSP_LEFTFLASH;
++}
++
++void HWDrawInfo::DrawXrHandSprites(FRenderState &state, const DoomXrHand &hand, bool left)
++{
+ 	bool any = false;
+ 	for (auto &h : hudsprites)
+-		if (!h.mframe && h.weapon && h.weapon->GetID() < PSP_TARGETCENTER) { any = true; break; }
++		if (!h.mframe && h.weapon && h.weapon->GetID() < PSP_TARGETCENTER && XrIsLeftLayer(h) == left) { any = true; break; }
+ 	if (!any) return;
+ 
+ 	const double stretch = Level->info->pixelstretch;
+@@ -154,7 +165,7 @@ void HWDrawInfo::DrawXrPlayerSprites(FRenderState &state)
+ 	const double sv = sh / stretch;						// ... and vertical
+ 	const double tilt = DAngle::fromDeg(vr_weapon_tilt).Radians();
+ 	const double ct = cos(tilt), st = sin(tilt);
+-	DoomXrHand H = xrHand;
++	DoomXrHand H = hand;
+ 	if (!vr_weapon_roll)
+ 	{
+ 		// Wrist roll would swing the sprite's barrel sideways while the shots keep going along the aim direction: use
+@@ -207,6 +218,7 @@ void HWDrawInfo::DrawXrPlayerSprites(FRenderState &state)
+ 	for (auto &hudsprite : hudsprites)
+ 	{
+ 		if (hudsprite.mframe || !hudsprite.weapon || hudsprite.weapon->GetID() >= PSP_TARGETCENTER) continue;
++		if (XrIsLeftLayer(hudsprite) != left) continue;
+ 		DrawPSprite(&hudsprite, state);
+ 	}
+ 	lightmode = oldlightmode;
