@@ -1,5 +1,6 @@
 package io.github.elmepox.doomxr;
 
+import android.content.Intent;
 import android.content.res.AssetManager;
 import android.os.Bundle;
 import android.system.ErrnoException;
@@ -36,6 +37,22 @@ public class DoomXRActivity extends SDLActivity {
             Log.e(TAG, "Failed to prepare engine environment", e);
         }
         super.onCreate(savedInstanceState);
+    }
+
+    /** Called from the engine thread through JNI (menu item "Return to library"). */
+    public void returnToLibrary() {
+        runOnUiThread(() -> {
+            startActivity(new Intent(this, LibraryActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            finishAndRemoveTask();
+        });
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        // The engine cannot be started twice in one process (SDL and engine statics); the game runs in its own
+        // process (see manifest), so end it with the activity and the next "Play" starts a clean one.
+        if (isFinishing()) android.os.Process.killProcess(android.os.Process.myPid());
     }
 
     @Override

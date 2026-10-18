@@ -90,6 +90,10 @@ int xr_get_hand(int hand, double baseX, double baseY, double baseZ, double baseY
 // how far below the line of sight its centre sits.
 void xr_hud_blit(unsigned srcFbo, int srcW, int srcH, float width, float distance, float drop);
 
+// ---- app switching ----
+// Leaves the game and shows the 2D mod library panel (implemented through DoomXRActivity.returnToLibrary).
+void xr_open_library(void);
+
 #ifdef __cplusplus
 }
 #endif

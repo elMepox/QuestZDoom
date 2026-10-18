@@ -1,0 +1,53 @@
+diff --git a/src/menu/doommenu.cpp b/src/menu/doommenu.cpp
+index b1102d6..794fa89 100644
+--- a/src/menu/doommenu.cpp
++++ b/src/menu/doommenu.cpp
+@@ -149,8 +149,20 @@ DEFINE_ACTION_FUNCTION_NATIVE(DMenu, StartGameDirect, StartGameDirect)
+ 	return 0;
+ }
+ 
++#ifdef DOOMXR_OPENXR
++extern "C" void xr_open_library(void);
++#endif
++
+ bool M_SetSpecialMenu(FName& menu, int param)
+ {
++#ifdef DOOMXR_OPENXR
++	// "Return to library": hands control back to the Android mod library panel.
++	if (menu == FName("DoomXRLibrary"))
++	{
++		xr_open_library();
++		return false;
++	}
++#endif
+ 	// some menus need some special treatment
+ 	switch (menu.GetIndex())
+ 	{
+diff --git a/wadsrc/static/menudef.txt b/wadsrc/static/menudef.txt
+index 60c07e8..ea2fbbf 100644
+--- a/wadsrc/static/menudef.txt
++++ b/wadsrc/static/menudef.txt
+@@ -90,6 +90,7 @@ LISTMENU "MainMenu"
+ 		{
+ 			PatchItem "M_RDTHIS","r", "ReadThisMenu", 0
+ 		}
++		TextItem "Return to library", "l", "DoomXRLibrary"
+ 		PatchItem "M_QUITG", "q", "QuitMenu", 0
+ 	}
+ 
+@@ -99,6 +100,7 @@ LISTMENU "MainMenu"
+ 		TextItem "$MNU_OPTIONS", "o", "OptionsMenu"
+ 		TextItem "$MNU_GAMEFILES", "g", "GameFilesMenu"
+ 		TextItem "$MNU_INFO", "i", "ReadThisMenu"
++		TextItem "Return to library", "l", "DoomXRLibrary"
+ 		TextItem "$MNU_QUITGAME", "q", "QuitMenu"
+ 	}
+ }
+@@ -134,6 +136,7 @@ LISTMENU "MainMenuTextOnly"
+ 	{
+ 		TextItem "$MNU_INFO", "i", "ReadThisMenu"
+ 	}
++	TextItem "Return to library", "l", "DoomXRLibrary"
+ 	TextItem "$MNU_QUITGAME", "q", "QuitMenu"
+ }
+ 
