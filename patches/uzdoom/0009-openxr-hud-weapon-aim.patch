@@ -297,10 +297,18 @@ index 70360f1..ce780c7 100644
  	uint64_t LastFrameTime = 0;
  
 diff --git a/src/rendering/hwrenderer/scene/hw_weapon.cpp b/src/rendering/hwrenderer/scene/hw_weapon.cpp
-index 917b73a..0b23d0f 100644
+index 917b73a..06baf69 100644
 --- a/src/rendering/hwrenderer/scene/hw_weapon.cpp
 +++ b/src/rendering/hwrenderer/scene/hw_weapon.cpp
-@@ -124,6 +124,78 @@ void HWDrawInfo::DrawPlayerSprites(bool hudModelStep, FRenderState &state)
+@@ -37,6 +37,7 @@
+ #include "flatvertices.h"
+ #include "hw_lightbuffer.h"
+ #include "hw_renderstate.h"
++#include "hw_viewpointbuffer.h"
+ 
+ #include "vm.h"
+ 
+@@ -124,6 +125,78 @@ void HWDrawInfo::DrawPlayerSprites(bool hudModelStep, FRenderState &state)
  }
  
  
