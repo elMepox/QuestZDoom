@@ -47,7 +47,7 @@ index 356b1989a..ce637c0d7 100644
  
  	static const double angdiff[3] = { -5.625, 5.625, 0 };
 diff --git a/src/playsim/p_pspr.cpp b/src/playsim/p_pspr.cpp
-index 3d07a6392..76be94aa6 100644
+index 3d07a6392..275cc6b53 100644
 --- a/src/playsim/p_pspr.cpp
 +++ b/src/playsim/p_pspr.cpp
 @@ -45,6 +45,9 @@
@@ -55,7 +55,7 @@ index 3d07a6392..76be94aa6 100644
  #include "actorinlines.h"
  #include "xr_vr.h"
 +#include <android/log.h>
-+#include "p_local.h"
++#include "p_linetracedata.h"
 +#include <math.h>
  EXTERN_CVAR(Int, vr_mode)
  EXTERN_CVAR(Bool, vr_hand_aim)
