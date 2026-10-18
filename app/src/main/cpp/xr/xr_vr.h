@@ -89,6 +89,9 @@ int xr_get_hand(int hand, double baseX, double baseY, double baseZ, double baseY
 // screen swapchain and shows it for this frame as a quad in front of the head: width and distance in meters, drop =
 // how far below the line of sight its centre sits.
 void xr_hud_blit(unsigned srcFbo, int srcW, int srcH, float width, float distance, float drop);
+// Wrist mode: show the HUD as a small panel (width in meters) above the left controller instead; without a tracked left
+// controller it stays in front of the head. Set before xr_hud_blit each frame.
+void xr_hud_set_wrist(int on, float width);
 
 // ---- app switching ----
 // Leaves the game and shows the 2D mod library panel (implemented through DoomXRActivity.returnToLibrary).
