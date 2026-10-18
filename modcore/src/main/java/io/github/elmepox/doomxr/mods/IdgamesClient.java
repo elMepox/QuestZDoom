@@ -22,8 +22,13 @@ import java.util.List;
 public final class IdgamesClient {
     public static final String API = "https://www.doomworld.com/idgames/api/api.php";
 
-    /** idgames mirrors laid out as {@code <base>/<dir><filename>}. Unverified defaults. */
+    /**
+     * idgames mirrors laid out as {@code <base>/<dir><filename>}. The first two are the ones used by the
+     * goidgames client; the others are unverified. The downloader tries them in order.
+     */
     public static final List<String> DEFAULT_MIRRORS = List.of(
+            "https://www.quaddicted.com/files/idgames/",
+            "https://ftpmirror1.infania.net/pub/idgames/",
             "https://youfailit.net/pub/idgames/",
             "https://ftp.fu-berlin.de/pc/games/idgames/");
 

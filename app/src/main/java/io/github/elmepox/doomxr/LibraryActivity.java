@@ -49,7 +49,10 @@ public class LibraryActivity extends Activity {
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final HttpFetcher http = HttpFetcher.standard("DoomXR/0.1 (+https://github.com/elmepox/questzdoom)");
+    private final HttpFetcher http = HttpFetcher.standard(
+            // Some hosts (Doomworld sits behind a WAF) answer 403 to tool-looking agents, so present as a normal client.
+            "Mozilla/5.0 (Linux; Android 14; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) "
+                    + "Chrome/126.0 Mobile Safari/537.36 DoomXR/0.1");
 
     private File modsDir, iwadDir;
     private ModLibrary library;

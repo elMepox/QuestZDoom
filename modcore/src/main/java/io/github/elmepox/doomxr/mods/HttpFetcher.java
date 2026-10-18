@@ -13,6 +13,8 @@ public interface HttpFetcher {
         return url -> {
             java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
             c.setRequestProperty("User-Agent", userAgent);
+            c.setRequestProperty("Accept", "application/json, application/zip, */*");
+            c.setRequestProperty("Accept-Language", "en");
             c.setConnectTimeout(15_000);
             c.setReadTimeout(30_000);
             c.setInstanceFollowRedirects(true);
