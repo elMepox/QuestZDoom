@@ -19,6 +19,9 @@ if(NOT DOOMXR_NO_CCACHE)
     message(STATUS "Using ccache: ${DOOMXR_CCACHE}")
     set(CMAKE_C_COMPILER_LAUNCHER "${DOOMXR_CCACHE}")
     set(CMAKE_CXX_COMPILER_LAUNCHER "${DOOMXR_CCACHE}")
+    # ccache cannot reuse results for translation units that use a precompiled header ("Could not use
+    # precompiled header"), which is nearly all of the engine. Compile the headers normally instead.
+    set(CMAKE_DISABLE_PRECOMPILE_HEADERS ON)
   endif()
 endif()
 
