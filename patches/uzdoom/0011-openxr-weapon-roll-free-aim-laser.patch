@@ -1,0 +1,188 @@
+diff --git a/src/common/platform/posix/sdl/i_input.cpp b/src/common/platform/posix/sdl/i_input.cpp
+index 96bffead9..5722d6841 100644
+--- a/src/common/platform/posix/sdl/i_input.cpp
++++ b/src/common/platform/posix/sdl/i_input.cpp
+@@ -335,6 +335,7 @@ static void XRInputTick()
+ 		if (pressed(XRB_B)) C_DoCommand("weapnext");
+ 		if (pressed(XRB_Y)) C_DoCommand("weapprev");
+ 		if (pressed(XRB_RTHUMB)) xr_recenter();
++		if (pressed(XRB_LTHUMB)) C_DoCommand("toggle vr_aim_laser");
+ 	}
+ 	XrHold(hAttack, inLevel && in.trigger[1] > 0.5f, "+attack", "-attack");
+ 	XrHold(hAlt, inLevel && in.trigger[0] > 0.5f, "+altattack", "-altattack");
+diff --git a/src/playsim/p_map.cpp b/src/playsim/p_map.cpp
+index 1f3d7a319..5db010fb4 100644
+--- a/src/playsim/p_map.cpp
++++ b/src/playsim/p_map.cpp
+@@ -4649,6 +4649,13 @@ AActor *P_LineAttack(AActor *t1, DAngle angle, double distance,
+ 	DAngle pitch, int damage, FName damageType, PClassActor *pufftype, int flags, FTranslatedLineTarget*victim, int *actualdamage,
+ 	double sz, double offsetforward, double offsetside)
+ {
++#ifdef DOOMXR_OPENXR
++	{
++		extern bool g_xrAimActive;
++		extern void XrLogShot(const char *what, AActor *m, DAngle angle, DAngle pitch);
++		if (g_xrAimActive) XrLogShot("hitscan", t1, angle, pitch);
++	}
++#endif
+ 	if (t1->Level->localEventManager->WorldHitscanPreFired(t1, angle, distance, pitch, damage, damageType, pufftype, flags, sz, offsetforward, offsetside))
+ 	{
+ 		return nullptr;
+diff --git a/src/playsim/p_mobj.cpp b/src/playsim/p_mobj.cpp
+index 356b1989a..ce637c0d7 100644
+--- a/src/playsim/p_mobj.cpp
++++ b/src/playsim/p_mobj.cpp
+@@ -8079,6 +8079,13 @@ AActor *P_SpawnPlayerMissile (AActor *source, double x, double y, double z,
+ 	{
+ 		return nullptr;
+ 	}
++#ifdef DOOMXR_OPENXR
++	{
++		extern bool g_xrAimActive;
++		extern void XrLogShot(const char *what, AActor *m, DAngle angle, DAngle pitch);
++		if (g_xrAimActive) XrLogShot("missile", source, angle, source->Angles.Pitch);
++	}
++#endif
+ 	aimflags &= ~ALF_IGNORENOAUTOAIM; // just to be safe.
+ 
+ 	static const double angdiff[3] = { -5.625, 5.625, 0 };
+diff --git a/src/playsim/p_pspr.cpp b/src/playsim/p_pspr.cpp
+index 3d07a6392..275cc6b53 100644
+--- a/src/playsim/p_pspr.cpp
++++ b/src/playsim/p_pspr.cpp
+@@ -45,6 +45,9 @@
+ #ifdef DOOMXR_OPENXR
+ #include "actorinlines.h"
+ #include "xr_vr.h"
++#include <android/log.h>
++#include "p_linetracedata.h"
++#include <math.h>
+ EXTERN_CVAR(Int, vr_mode)
+ EXTERN_CVAR(Bool, vr_hand_aim)
+ EXTERN_CVAR(Float, vr_hunits_per_meter)
+@@ -52,6 +55,8 @@ EXTERN_CVAR(Float, vr_hunits_per_meter)
+ // While a weapon action function runs (A_FireBullets, A_FireProjectile, A_Punch, ...), the local player's actor is
+ // moved to the right controller's pose, so hitscans and projectiles start at the hand and follow its aim direction.
+ // The actor is put back right afterwards; nothing else sees the temporary pose.
++bool g_xrAimActive = false;	// an XrAimScope is open: P_LineAttack / P_SpawnPlayerMissile log what they receive
++
+ struct XrAimScope
+ {
+ 	AActor *mo = nullptr;
+@@ -67,6 +72,7 @@ struct XrAimScope
+ 		DoomXrHand h;
+ 		if (!xr_get_hand(1, m->X(), m->Y(), p->viewz, m->Angles.Yaw.Degrees(), vr_hunits_per_meter / stretch, stretch, &h)) return;
+ 		mo = m;
++		g_xrAimActive = true;
+ 		pos = m->Pos();
+ 		yaw = m->Angles.Yaw;
+ 		pitch = m->Angles.Pitch;
+@@ -79,11 +85,55 @@ struct XrAimScope
+ 	~XrAimScope()
+ 	{
+ 		if (mo == nullptr) return;
++		g_xrAimActive = false;
+ 		mo->SetXYZ(pos);
+ 		mo->Angles.Yaw = yaw;
+ 		mo->Angles.Pitch = pitch;
+ 	}
+ };
++
++// Logs the angles a weapon function really passes on: the hand pose is yaw/pitch of the scope (m->Angles), the shot
++// adds spread and autoaim on top. Differences are in degrees, normalised to -180..180.
++void XrLogShot(const char *what, AActor *m, DAngle angle, DAngle pitch)
++{
++	__android_log_print(ANDROID_LOG_INFO, "DoomXR-Aim", "%s: angle %.1f pitch %.1f (hand yaw %.1f pitch %.1f; d_yaw %.1f d_pitch %.1f) at %.0f,%.0f,%.0f",
++	                    what, angle.Normalized180().Degrees(), pitch.Degrees(), m->Angles.Yaw.Normalized180().Degrees(), m->Angles.Pitch.Degrees(),
++	                    deltaangle(m->Angles.Yaw, angle).Degrees(), (pitch - m->Angles.Pitch).Degrees(), m->X(), m->Y(), m->Z());
++}
++
++CVAR(Bool, vr_aim_laser, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// debug: mark with small lights where the shots of the right hand go
++
++// A dotted line from the hand to the point a hitscan from the hand would hit, drawn as short-lived world sprites. It is
++// built inside the same XrAimScope as a shot, so it uses exactly the position and angles the weapon functions see.
++void XrAimLaser(player_t *p)
++{
++	if (!vr_aim_laser) return;
++	XrAimScope aim(p);
++	AActor *m = aim.mo;
++	if (m == nullptr) return;
++	static PClassActor *dot = PClass::FindActor("Candlestick");
++	if (dot == nullptr) return;
++
++	const double range = 4096;
++	const double sz = m->Height * 0.5 + m->AttackOffset();	// Center() - Floorclip + AttackOffset() as in P_LineAttack
++	FLineTraceData tr;
++	const bool hit = P_LineTrace(m, m->Angles.Yaw, range, m->Angles.Pitch, 0, sz, 0, 0, &tr) != 0;
++	const double len = hit ? tr.Distance : range;
++	const double pc = m->Angles.Pitch.Cos();
++	const DVector3 dir(pc * m->Angles.Yaw.Cos(), pc * m->Angles.Yaw.Sin(), -m->Angles.Pitch.Sin());
++	const DVector3 start = m->PosAtZ(m->Z() - m->Floorclip + sz);
++
++	auto put = [&](double dist, double scale)
++	{
++		AActor *d = Spawn(m->Level, dot, start + dir * dist, NO_REPLACE);
++		if (d == nullptr) return;
++		d->flags |= MF_NOGRAVITY;
++		d->Scale = DVector2(scale, scale);
++		d->tics = 2;	// gone after two tics: the next tic draws the line again
++	};
++	for (int i = 1; i <= 10; i++) put(len * i / 11, 0.2);
++	put(len, 0.6);
++}
+ #endif
+ 
+ 
+diff --git a/src/playsim/p_user.cpp b/src/playsim/p_user.cpp
+index 79dbe5310..6c9d3ad09 100644
+--- a/src/playsim/p_user.cpp
++++ b/src/playsim/p_user.cpp
+@@ -1702,6 +1702,12 @@ void P_PlayerThink (player_t *player)
+ 		P_BobWeapon(player);
+ 	else if (BobType == PSPB_3D)
+ 		P_BobWeapon3D(player);
++#ifdef DOOMXR_OPENXR
++	{
++		extern void XrAimLaser(player_t *p);
++		XrAimLaser(player);
++	}
++#endif
+ 
+ 	// Moved this to directly after player thinking to get more accurate velocity values. Also takes
+ 	// 3D vs 2D movement into account now.
+diff --git a/src/rendering/hwrenderer/scene/hw_weapon.cpp b/src/rendering/hwrenderer/scene/hw_weapon.cpp
+index 06baf69cb..48dc371b4 100644
+--- a/src/rendering/hwrenderer/scene/hw_weapon.cpp
++++ b/src/rendering/hwrenderer/scene/hw_weapon.cpp
+@@ -129,6 +129,7 @@ void HWDrawInfo::DrawPlayerSprites(bool hudModelStep, FRenderState &state)
+ EXTERN_CVAR(Float, vr_hunits_per_meter)
+ EXTERN_CVAR(Float, vr_weapon_scale)
+ EXTERN_CVAR(Float, vr_weapon_tilt)
++CVAR(Bool, vr_weapon_roll, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// the weapon sprite follows the wrist roll (off: stays upright so it points where the shots go)
+ 
+ //==========================================================================
+ //
+@@ -153,7 +154,22 @@ void HWDrawInfo::DrawXrPlayerSprites(FRenderState &state)
+ 	const double sv = sh / stretch;						// ... and vertical
+ 	const double tilt = DAngle::fromDeg(vr_weapon_tilt).Radians();
+ 	const double ct = cos(tilt), st = sin(tilt);
+-	const DoomXrHand &H = xrHand;
++	DoomXrHand H = xrHand;
++	if (!vr_weapon_roll)
++	{
++		// Wrist roll would swing the sprite's barrel sideways while the shots keep going along the aim direction: use
++		// a frame without roll (image-right stays horizontal), so the barrel always lines up with the aim yaw.
++		double rx = H.fy, ry = -H.fx;
++		const double rl = sqrt(rx * rx + ry * ry);
++		if (rl > 0.2)	// not aiming (nearly) straight up or down
++		{
++			rx /= rl; ry /= rl;
++			H.rx = rx; H.ry = ry; H.rz = 0;
++			H.ux = ry * H.fz;
++			H.uy = -rx * H.fz;
++			H.uz = rx * H.fy - ry * H.fx;
++		}
++	}
+ 	// Image up: the hand's up tipped towards its aim direction.
+ 	double iux = H.ux * ct + H.fx * st, iuy = H.uy * ct + H.fy * st, iuz = H.uz * ct + H.fz * st;
+ 	const double il = sqrt(iux * iux + iuy * iuy + iuz * iuz);
