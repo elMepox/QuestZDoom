@@ -39,17 +39,42 @@ public class DoomXRActivity extends SDLActivity {
         super.onCreate(savedInstanceState);
     }
 
+    private boolean libraryStarted;
+
+    /** Shows the 2D library panel once, whichever way the game ends. */
+    private void showLibrary() {
+        if (libraryStarted) return;
+        libraryStarted = true;
+        try {
+            startActivity(new Intent(this, LibraryActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (RuntimeException e) {
+            Log.w(TAG, "could not show the library", e);
+        }
+    }
+
     /** Called from the engine thread through JNI (menu item "Return to library"). */
     public void returnToLibrary() {
         runOnUiThread(() -> {
-            startActivity(new Intent(this, LibraryActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            showLibrary();
             finishAndRemoveTask();
         });
+    }
+
+    /**
+     * Every normal way out of the game (engine Quit, SDL quit, the menu item above) ends in finish(), and
+     * all of them go back to the panel instead of leaving the app.
+     */
+    @Override
+    public void finish() {
+        showLibrary();
+        super.finish();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        // Closed from the system (window close): finish() may not have run, so try here as well.
+        if (isFinishing()) showLibrary();
         // The engine cannot be started twice in one process (SDL and engine statics); the game runs in its own
         // process (see manifest), so end it with the activity and the next "Play" starts a clean one.
         if (isFinishing()) android.os.Process.killProcess(android.os.Process.myPid());
