@@ -51,6 +51,7 @@ struct State
 	XrSystemId system = XR_NULL_SYSTEM_ID;
 	XrSession session = XR_NULL_HANDLE;
 	XrSpace space = XR_NULL_HANDLE;
+	XrSpace viewSpace = XR_NULL_HANDLE;
 	XrSessionState sessionState = XR_SESSION_STATE_UNKNOWN;
 	bool running = false;
 	int width = 0, height = 0;
@@ -93,6 +94,8 @@ struct State
 
 	// UI quad placement
 	bool uiWasShown = false;
+	bool hudWanted = false;
+	float hudW = 1.4f, hudDist = 1.5f, hudDrop = 0.f;
 	XrPosef uiPose;
 	float uiW = 1.5f, uiH = 1.5f;
 } g;
@@ -579,6 +582,9 @@ int xr_init(void)
 	rs.poseInReferenceSpace.orientation.w = 1.f;
 	if (!check(xrCreateReferenceSpace(g.session, &rs, &g.space), "xrCreateReferenceSpace")) return 0;
 
+	rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+	if (!check(xrCreateReferenceSpace(g.session, &rs, &g.viewSpace), "xrCreateReferenceSpace(view)")) g.viewSpace = XR_NULL_HANDLE;
+
 	g.inputOk = setupInput();
 	LOGI("controller input %s", g.inputOk ? "ready (oculus/touch_controller profile)" : "FAILED to set up");
 
@@ -658,6 +664,70 @@ float xr_take_head_pitch_delta(void)
 	const float d = p - g.appliedPitch;
 	g.appliedPitch = p;
 	return d;
+}
+
+int xr_get_hand(int hand, double bx, double by, double bz, double byawDeg, double upm, double stretch, DoomXrHand *o)
+{
+	if (!o || !g.ok || !g.haveOrigin || !g.haveLastViews || hand < 0 || hand > 1) return 0;
+	XrPosef p;
+	if (g.aimValid[hand] && g.running)
+		p = g.aim[hand];
+	else
+	{
+		// No controller pose: hold an imaginary weapon in front of the head, lower right.
+		const XrPosef &hp = g.lastViews[0].pose;
+		Vec3 off = rotate(hp.orientation, {hand == 1 ? 0.18f : -0.18f, -0.28f, -0.35f});
+		p.orientation = hp.orientation;
+		p.position = {0.5f * (g.lastViews[0].pose.position.x + g.lastViews[1].pose.position.x) + off.x,
+		              0.5f * (g.lastViews[0].pose.position.y + g.lastViews[1].pose.position.y) + off.y,
+		              0.5f * (g.lastViews[0].pose.position.z + g.lastViews[1].pose.position.z) + off.z};
+	}
+	const double so = sin(g.originYaw), co = cos(g.originYaw);
+	const double rad = byawDeg * 0.017453292519943295;
+	const double cy = cos(rad), sy = sin(rad);
+	// A direction in OpenXR axes -> Doom world axes (heading = base yaw, origin heading removed).
+	auto dir = [&](Vec3 v, double *wx, double *wy, double *wz) {
+		const double fwd = -so * v.x - co * v.z, rgt = co * v.x - so * v.z;
+		*wx = fwd * cy + rgt * sy;
+		*wy = fwd * sy - rgt * cy;
+		*wz = v.y;
+	};
+	const double dx = p.position.x - g.originPos[0], dz = p.position.z - g.originPos[2];
+	const double fwd = -so * dx - co * dz, rgt = co * dx - so * dz, up = p.position.y - g.originPos[1];
+	o->x = bx + upm * (fwd * cy + rgt * sy);
+	o->y = by + upm * (fwd * sy - rgt * cy);
+	o->z = bz + upm * up / stretch;
+	dir(rotate(p.orientation, {0, 0, -1}), &o->fx, &o->fy, &o->fz);
+	dir(rotate(p.orientation, {1, 0, 0}), &o->rx, &o->ry, &o->rz);
+	dir(rotate(p.orientation, {0, 1, 0}), &o->ux, &o->uy, &o->uz);
+	o->yaw = atan2(o->fy, o->fx) * 57.29577951308232;
+	double fz = o->fz < -1 ? -1 : (o->fz > 1 ? 1 : o->fz);
+	o->pitch = -asin(fz) * 57.29577951308232;
+	return 1;
+}
+
+void xr_hud_blit(unsigned srcFbo, int sw, int sh, float width, float distance, float drop)
+{
+	if (!g.ok || !g.active) return;
+	GLuint fbo = acquire(g.ui);
+	if (!fbo) return;
+	g.uiDrawn = true;
+	GLint prevRead = 0, prevDraw = 0;
+	glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+	glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
+	GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST);
+	glDisable(GL_SCISSOR_TEST);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+	glBlitFramebuffer(0, 0, sw, sh, 0, 0, g.ui.width, g.ui.height, GL_COLOR_BUFFER_BIT,
+	                  (sw == g.ui.width && sh == g.ui.height) ? GL_NEAREST : GL_LINEAR);
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, prevRead);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDraw);
+	if (scissor) glEnable(GL_SCISSOR_TEST);
+	g.hudWanted = true;
+	g.hudW = width;
+	g.hudDist = distance;
+	g.hudDrop = drop;
 }
 
 int xr_frame_active(void) { return g.active ? 1 : 0; }
@@ -889,6 +959,22 @@ int xr_frame_end(int uiWanted)
 		layers[nl++] = (const XrCompositionLayerBaseHeader *)&quad;
 	}
 
+	// Head-locked HUD (gameplay): the screen image with a transparent background in front of the face.
+	XrCompositionLayerQuad hudQuad = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+	if (!showUi && g.hudWanted && g.uiDrawn && g.shouldRender && g.viewSpace != XR_NULL_HANDLE)
+	{
+		hudQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+		hudQuad.space = g.viewSpace;
+		hudQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+		hudQuad.subImage.swapchain = g.ui.handle;
+		hudQuad.subImage.imageRect.offset = {0, 0};
+		hudQuad.subImage.imageRect.extent = {g.ui.width, g.ui.height};
+		hudQuad.pose.orientation = {0.f, 0.f, 0.f, 1.f};
+		hudQuad.pose.position = {0.f, -g.hudDrop, -g.hudDist};
+		hudQuad.size = {g.hudW, g.hudW * (float)g.ui.height / (float)g.ui.width};
+		layers[nl++] = (const XrCompositionLayerBaseHeader *)&hudQuad;
+	}
+
 	// Laser pointer: a thin quad from the pointing hand to the screen, drawn after (in front of) it.
 	XrCompositionLayerQuad laserQuad = {XR_TYPE_COMPOSITION_LAYER_QUAD};
 	if (showUi && g.laserHit && g.laser.handle != XR_NULL_HANDLE && g.aimValid[g.input.uiHand])
@@ -980,6 +1066,7 @@ int xr_frame_end(int uiWanted)
 		     (int)g.active, (int)g.eyeDone[0], (int)g.eyeDone[1], (int)showUi, uiWanted, (int)g.uiDrawn);
 	g.frameNo++;
 
+	g.hudWanted = false;
 	g.frameBegun = false;
 	g.active = false;
 	return 1;
