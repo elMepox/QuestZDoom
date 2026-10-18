@@ -1,0 +1,53 @@
+diff --git a/wadsrc/static/menudef.txt b/wadsrc/static/menudef.txt
+index 60c07e85d..15ca59636 100644
+--- a/wadsrc/static/menudef.txt
++++ b/wadsrc/static/menudef.txt
+@@ -353,11 +353,48 @@ DefaultOptionMenu
+ 	}
+ }
+ 
++OptionValue "DoomXRTurnMode"
++{
++	0, "Smooth"
++	1, "Snap"
++}
++
++// DoomXR: the headset-specific switches, so they do not have to be flipped with button combinations.
++OptionMenu "DoomXRVRMenu" protected
++{
++	Title "VR settings"
++	StaticText "Weapons", 1
++	Option "Shoot from the controller",		vr_hand_aim,		OnOff
++	Option "Dual wield (left hand)",		vr_dual_wield,		OnOff
++	Option "Aim lasers",					vr_aim_laser,		OnOff
++	Option "Weapon follows wrist roll",		vr_weapon_roll,		OnOff
++	Slider "Weapon size",					vr_weapon_scale,	0.3, 3.0, 0.1, 1
++	Slider "Weapon tilt",					vr_weapon_tilt,		0, 90, 5, 0
++	StaticText " "
++	StaticText "HUD", 1
++	Option "Forearm HUD",					vr_hud_custom,		OnOff
++	Option "Like a wristwatch",				vr_hud_panel_watch,	OnOff
++	Slider "HUD width",						vr_hud_panel_width,	0.1, 0.5, 0.01, 2
++	Slider "HUD towards the elbow",			vr_hud_panel_back,	-0.1, 0.3, 0.01, 2
++	Slider "HUD above the wrist",			vr_hud_panel_lift,	-0.05, 0.2, 0.01, 2
++	Slider "Head-locked HUD width",			vr_hud_width,		0.5, 3.0, 0.1, 1
++	Slider "Head-locked HUD distance",		vr_hud_distance,	0.8, 4.0, 0.1, 1
++	StaticText " "
++	StaticText "Movement", 1
++	Option "Turning",						vr_turn_mode,		DoomXRTurnMode
++	Slider "Snap turn angle",				vr_snap_turn_degrees, 10, 90, 5, 0
++	Option "Walking view bob",				vr_viewbob,			OnOff
++	Slider "Map units per meter",			vr_hunits_per_meter, 20, 80, 1, 0
++	StaticText " "
++}
++
+ OptionMenu "OptionsMenu" protected
+ {
+ 	Title "$OPTMNU_TITLE"
+ 	Submenu "$OS_TITLE", "os_Menu"
+ 	StaticText " "
++	Submenu "VR settings",				"DoomXRVRMenu"
++	StaticText " "
+ 	Submenu "$OPTMNU_CONTROLS",			"CustomizeControls"
+ 	Submenu "$OPTMNU_MOUSE",			"MouseOptions"
+ 	Submenu "$OPTMNU_JOYSTICK",			"JoystickOptions"
