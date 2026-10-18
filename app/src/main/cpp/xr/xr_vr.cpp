@@ -1072,4 +1072,29 @@ int xr_frame_end(int uiWanted)
 	return 1;
 }
 
+// Asks the Java activity to switch back to the 2D library panel (menu item "Return to library").
+void xr_open_library(void)
+{
+	JNIEnv *env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+	jobject activity = (jobject)SDL_AndroidGetActivity();
+	if (!env || !activity)
+	{
+		LOGE("xr_open_library: no JNI environment/activity");
+		return;
+	}
+	jclass cls = env->GetObjectClass(activity);
+	jmethodID mid = cls ? env->GetMethodID(cls, "returnToLibrary", "()V") : nullptr;
+	if (!mid)
+	{
+		env->ExceptionClear();
+		LOGE("xr_open_library: DoomXRActivity.returnToLibrary not found");
+	}
+	else
+	{
+		env->CallVoidMethod(activity, mid);
+	}
+	if (cls) env->DeleteLocalRef(cls);
+	env->DeleteLocalRef(activity);
+}
+
 } // extern "C"

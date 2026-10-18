@@ -41,8 +41,25 @@
 
         <meta-data android:name="com.oculus.supportedDevices" android:value="quest3|quest3s" />
 
+        <!-- 2D panel: mod library, catalog, import. Entry point of the app; starts the immersive activity. -->
+        <activity
+            android:name=".LibraryActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.DeviceDefault.Light">
+            <layout android:defaultWidth="900dp" android:defaultHeight="700dp"
+                android:minWidth="600dp" android:minHeight="500dp" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="com.oculus.intent.category.2D" />
+            </intent-filter>
+        </activity>
+
         <activity
             android:name=".DoomXRActivity"
+            android:process=":game"
             android:exported="true"
             android:label="@string/app_name"
             android:launchMode="singleTask"
@@ -53,7 +70,6 @@
             android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation|density">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="com.oculus.intent.category.VR" />
                 <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
             </intent-filter>

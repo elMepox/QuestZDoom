@@ -3,6 +3,8 @@ name: Android
 on:
   push:
     branches: [doomxr]
+  pull_request:
+    branches: [doomxr]
   workflow_dispatch:
 
 concurrency:
@@ -24,6 +26,9 @@ jobs:
           java-version: 17
 
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          # external/SDL ships its own gradle-wrapper.jar, which fails validation; only the root wrapper is used.
+          validate-wrappers: false
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2

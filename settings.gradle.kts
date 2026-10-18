@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "DoomXR"
-include(":app")
+include(":app", ":modcore")

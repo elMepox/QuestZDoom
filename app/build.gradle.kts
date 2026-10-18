@@ -106,6 +106,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":modcore"))
     implementation("org.khronos.openxr:openxr_loader_for_android:1.1.65")
 }
 
