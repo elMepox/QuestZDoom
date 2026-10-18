@@ -1,0 +1,18 @@
+diff --git a/src/d_net.cpp b/src/d_net.cpp
+--- a/src/d_net.cpp
++++ b/src/d_net.cpp
+@@ -2209,8 +2209,14 @@
+ 	bool doWait = (cl_capfps || pauseext || (!netgame && r_NoInterpolate && !M_IsAnimated()));
+ 	if (vid_dontdowait && (vid_maxfps > 0 || vid_vsync))
+ 		doWait = false;
++#ifdef __ANDROID__
++	// On a headset xrWaitFrame paces rendering. Waiting for the next tic here (paused game, system menu open, lost
++	// focus) would tie the render to the 35 Hz tic rate and make the compositor reproject every other frame.
++	doWait = false;
++#else
+ 	if (!netgame && !AppActive && vid_lowerinbackground)
+ 		doWait = true;
++#endif
+ 
+ 	// Get the full number of tics the client can run.
+ 	XRSTAGE(doWait ? "TryRunTics:I_WaitForTic" : "TryRunTics:I_GetTime");
