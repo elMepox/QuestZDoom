@@ -83,7 +83,7 @@ struct State
 	float appliedPitch = 0;
 	Swap laser;			// tiny swapchain for the laser pointer quad
 	Swap panel;			// interactive forearm HUD panel
-	struct Beam { Swap sw; float len = 0; unsigned lastFrame = 0; bool used = false; float rgb[3] = {1, 1, 1}; } beam[2];	// aim lasers, one per hand
+	struct Beam { Swap sw; float len = 0, start = 0; unsigned lastFrame = 0; bool used = false; float rgb[3] = {1, 1, 1}; } beam[2];	// aim lasers, one per hand
 	bool panelOn = false, panelDrawn = false, panelShown = false;
 	float panelW = 0.3f, panelFrac = 0.25f;	// panelFrac: height of the panel's corner of the screen image, as a fraction of its height
 	bool panelHover = false;
@@ -847,11 +847,12 @@ void xr_hud_set_wrist(int on, float width)
 	g.hudWristW = width < 0.05f ? 0.05f : (width > 1.5f ? 1.5f : width);
 }
 
-void xr_laser_set(int hand, float lengthMeters, unsigned rgb)
+void xr_laser_set(int hand, float lengthMeters, unsigned rgb, float startMeters)
 {
 	if (hand < 0 || hand > 1) return;
 	auto &b = g.beam[hand];
 	b.len = lengthMeters;
+	b.start = startMeters < 0.f ? 0.f : (startMeters > 1.f ? 1.f : startMeters);
 	b.rgb[0] = ((rgb >> 16) & 255) / 255.f;
 	b.rgb[1] = ((rgb >> 8) & 255) / 255.f;
 	b.rgb[2] = (rgb & 255) / 255.f;
@@ -1184,7 +1185,9 @@ int xr_frame_end(int uiWanted)
 		const Vec3 head = {0.5f * (g.views[0].pose.position.x + g.views[1].pose.position.x),
 		                   0.5f * (g.views[0].pose.position.y + g.views[1].pose.position.y),
 		                   0.5f * (g.views[0].pose.position.z + g.views[1].pose.position.z)};
-		const float len = b.len > 60.f ? 60.f : b.len;
+		const float total = b.len > 60.f ? 60.f : b.len;
+		const float len = total - b.start;
+		if (len < 0.03f) continue;
 		auto place = [&](XrCompositionLayerQuad &q, Vec3 mid, float sx, float sy) {
 			const Vec3 toHead = {head.x - mid.x, head.y - mid.y, head.z - mid.z};
 			const float dd = toHead.x * dir.x + toHead.y * dir.y + toHead.z * dir.z;
@@ -1204,9 +1207,9 @@ int xr_frame_end(int uiWanted)
 			q.size = {sx, sy};
 			return true;
 		};
-		if (place(beamQuad[h], {a.position.x + dir.x * len * 0.5f, a.position.y + dir.y * len * 0.5f, a.position.z + dir.z * len * 0.5f}, len, 0.006f))
+		if (place(beamQuad[h], {a.position.x + dir.x * (b.start + len * 0.5f), a.position.y + dir.y * (b.start + len * 0.5f), a.position.z + dir.z * (b.start + len * 0.5f)}, len, 0.006f))
 			layers[nl++] = (const XrCompositionLayerBaseHeader *)&beamQuad[h];
-		if (place(dotQuad[h], {a.position.x + dir.x * len, a.position.y + dir.y * len, a.position.z + dir.z * len}, 0.03f, 0.03f))
+		if (place(dotQuad[h], {a.position.x + dir.x * total, a.position.y + dir.y * total, a.position.z + dir.z * total}, 0.03f, 0.03f))
 			layers[nl++] = (const XrCompositionLayerBaseHeader *)&dotQuad[h];
 	}
 

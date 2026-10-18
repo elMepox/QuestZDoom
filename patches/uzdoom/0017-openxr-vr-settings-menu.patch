@@ -1,8 +1,8 @@
 diff --git a/wadsrc/static/menudef.txt b/wadsrc/static/menudef.txt
-index 60c07e85d..6b456ce96 100644
+index 60c07e85d..c503b42e9 100644
 --- a/wadsrc/static/menudef.txt
 +++ b/wadsrc/static/menudef.txt
-@@ -353,11 +353,53 @@ DefaultOptionMenu
+@@ -353,11 +353,54 @@ DefaultOptionMenu
  	}
  }
  
@@ -20,6 +20,7 @@ index 60c07e85d..6b456ce96 100644
 +	Option "Shoot from the controller",		vr_hand_aim,		OnOff
 +	Option "Dual wield (left hand)",		vr_dual_wield,		OnOff
 +	Option "Aim lasers",					vr_aim_laser,		OnOff
++	Slider "Laser starts ahead by",			vr_aim_laser_start,	0, 0.5, 0.01, 2
 +	Option "Weapon follows wrist roll",		vr_weapon_roll,		OnOff
 +	Slider "Weapon size",					vr_weapon_scale,	0.3, 3.0, 0.1, 1
 +	Slider "Weapon tilt",					vr_weapon_tilt,		0, 90, 5, 0

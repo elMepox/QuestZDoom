@@ -1,13 +1,14 @@
 diff --git a/src/playsim/p_pspr.cpp b/src/playsim/p_pspr.cpp
-index 26e124d07..ea67f4372 100644
+index 26e124d07..6359624ce 100644
 --- a/src/playsim/p_pspr.cpp
 +++ b/src/playsim/p_pspr.cpp
-@@ -189,44 +189,31 @@ void XrLogShot(const char *what, AActor *m, DAngle angle, DAngle pitch)
+@@ -189,44 +189,32 @@ void XrLogShot(const char *what, AActor *m, DAngle angle, DAngle pitch)
  	                    deltaangle(m->Angles.Yaw, angle).Degrees(), (pitch - m->Angles.Pitch).Degrees(), m->X(), m->Y(), m->Z());
  }
  
 -CVAR(Bool, vr_aim_laser, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// debug: mark with small lights where the shots of the right hand go
 +CVAR(Bool, vr_aim_laser, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// debug: mark with small lights where the shots go
++CVAR(Float, vr_aim_laser_start, 0.12f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// the beam starts this far (meters) in front of the controller, so the weapon in the hand is not covered by it
  
 -// A dotted line from each hand to the point a hitscan from the same pose would hit, drawn as short-lived world sprites:
 -// yellow for the right hand, blue for the left one (while dual wield is on and the left weapon is out). Each line is
@@ -55,7 +56,7 @@ index 26e124d07..ea67f4372 100644
 +	const double upm = vr_hunits_per_meter / stretch;
 +	const double pc = m->Angles.Pitch.Cos(), sn = m->Angles.Pitch.Sin();
 +	const double meters = len / upm * sqrt(pc * pc + sn * sn * stretch * stretch);
-+	xr_laser_set(hand, (float)meters, hand == 0 ? 0x40A0FF : 0xFFD83A);
++	xr_laser_set(hand, (float)meters, hand == 0 ? 0x40A0FF : 0xFFD83A, vr_aim_laser_start);
  }
  
  void XrAimLaser(player_t *p)
