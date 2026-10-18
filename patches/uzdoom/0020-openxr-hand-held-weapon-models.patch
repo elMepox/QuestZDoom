@@ -26,7 +26,7 @@ index 13c41b70f3..59944e9ce7 100644
  	//TArray<ACorona*> Coronas;
  	uint64_t LastFrameTime = 0;
 diff --git a/src/rendering/hwrenderer/scene/hw_weapon.cpp b/src/rendering/hwrenderer/scene/hw_weapon.cpp
-index 6051a02e5a..4eb7fad809 100644
+index 6051a02e5a..b061c6a8ae 100644
 --- a/src/rendering/hwrenderer/scene/hw_weapon.cpp
 +++ b/src/rendering/hwrenderer/scene/hw_weapon.cpp
 @@ -36,6 +36,7 @@
@@ -37,16 +37,17 @@ index 6051a02e5a..4eb7fad809 100644
  #include "hw_renderstate.h"
  #include "hw_viewpointbuffer.h"
  
-@@ -130,6 +131,8 @@ EXTERN_CVAR(Float, vr_hunits_per_meter)
+@@ -130,6 +131,9 @@ EXTERN_CVAR(Float, vr_hunits_per_meter)
  EXTERN_CVAR(Float, vr_weapon_scale)
  EXTERN_CVAR(Float, vr_weapon_tilt)
  CVAR(Bool, vr_weapon_roll, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// the weapon sprite follows the wrist roll (off: stays upright so it points where the shots go)
 +CVAR(Float, vr_weapon_model_scale, 1.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// size of a hand-held 3D weapon model (1 model unit = 1 meter at 1.0)
++CVAR(Bool, vr_weapon_model_roll, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// a hand-held 3D weapon model follows the wrist roll too (off: stays upright)
 +CVAR(Float, vr_weapon_model_pitch, 0.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// tips a hand-held 3D weapon model up (+) or down (-) from the controller's aim, degrees
  
  //==========================================================================
  //
-@@ -145,6 +148,8 @@ void HWDrawInfo::DrawXrPlayerSprites(FRenderState &state)
+@@ -145,6 +149,8 @@ void HWDrawInfo::DrawXrPlayerSprites(FRenderState &state)
  {
  	if (xrHandValid) DrawXrHandSprites(state, xrHand, false);
  	if (xrHandLValid) DrawXrHandSprites(state, xrHandL, true);
@@ -55,15 +56,15 @@ index 6051a02e5a..4eb7fad809 100644
  }
  
  // The weapon layers of the left hand (dual wield) are PSP_LEFT and PSP_LEFTFLASH; everything else is the right hand's.
-@@ -153,6 +158,23 @@ static bool XrIsLeftLayer(const HUDSprite &h)
+@@ -153,6 +159,23 @@ static bool XrIsLeftLayer(const HUDSprite &h)
  	return h.weapon->GetID() == PSP_LEFT || h.weapon->GetID() == PSP_LEFTFLASH;
  }
  
 +// Wrist roll would swing a weapon's barrel sideways while the shots keep going along the aim direction: unless
-+// vr_weapon_roll is on, use a frame without roll (right stays horizontal), so the barrel always lines up with the aim yaw.
-+static void XrLevelHandFrame(DoomXrHand &H)
++// the roll option is on, use a frame without roll (right stays horizontal), so the barrel always lines up with the aim yaw.
++static void XrLevelHandFrame(DoomXrHand &H, bool followRoll)
 +{
-+	if (vr_weapon_roll) return;
++	if (followRoll) return;
 +	double rx = H.fy, ry = -H.fx;
 +	const double rl = sqrt(rx * rx + ry * ry);
 +	if (rl > 0.2)	// not aiming (nearly) straight up or down
@@ -79,7 +80,7 @@ index 6051a02e5a..4eb7fad809 100644
  void HWDrawInfo::DrawXrHandSprites(FRenderState &state, const DoomXrHand &hand, bool left)
  {
  	bool any = false;
-@@ -166,21 +188,7 @@ void HWDrawInfo::DrawXrHandSprites(FRenderState &state, const DoomXrHand &hand,
+@@ -166,21 +189,7 @@ void HWDrawInfo::DrawXrHandSprites(FRenderState &state, const DoomXrHand &hand,
  	const double tilt = DAngle::fromDeg(vr_weapon_tilt).Radians();
  	const double ct = cos(tilt), st = sin(tilt);
  	DoomXrHand H = hand;
@@ -98,11 +99,11 @@ index 6051a02e5a..4eb7fad809 100644
 -			H.uz = rx * H.fy - ry * H.fx;
 -		}
 -	}
-+	XrLevelHandFrame(H);
++	XrLevelHandFrame(H, vr_weapon_roll);
  	// Image up: the hand's up tipped towards its aim direction.
  	double iux = H.ux * ct + H.fx * st, iuy = H.uy * ct + H.fy * st, iuz = H.uz * ct + H.fz * st;
  	const double il = sqrt(iux * iux + iuy * iuy + iuz * iuz);
-@@ -223,6 +231,75 @@ void HWDrawInfo::DrawXrHandSprites(FRenderState &state, const DoomXrHand &hand,
+@@ -223,6 +232,81 @@ void HWDrawInfo::DrawXrHandSprites(FRenderState &state, const DoomXrHand &hand,
  	}
  	lightmode = oldlightmode;
  }
@@ -113,7 +114,7 @@ index 6051a02e5a..4eb7fad809 100644
 +//
 +// RenderHUDModel() places a model relative to the eye (+x right, +y up, -z forward, model x pointing forward);
 +// here that frame is replaced by the hand's: origin on the controller, forward along its aim direction (tipped by
-+// vr_weapon_model_pitch), up from the controller (roll-free unless vr_weapon_roll). One model unit is one meter
++// vr_weapon_model_pitch), up from the controller (the full controller rotation unless vr_weapon_model_roll is off). One model unit is one meter
 +// times vr_weapon_model_scale; MODELDEF Scale/Offset apply on top. The model is drawn with the eye's real view
 +// and projection over a cleared depth buffer, so it is lit by the level and hidden behind nothing.
 +//
@@ -131,7 +132,7 @@ index 6051a02e5a..4eb7fad809 100644
 +	const double sv = sh / stretch;						// ... and vertical
 +	const double k = vr_weapon_model_scale;
 +	DoomXrHand H = hand;
-+	XrLevelHandFrame(H);
++	XrLevelHandFrame(H, vr_weapon_model_roll);
 +	// Aim direction tipped up by the pitch offset; image up follows.
 +	const double pitch = DAngle::fromDeg(vr_weapon_model_pitch).Radians();
 +	const double cp = cos(pitch), sp = sin(pitch);
@@ -163,12 +164,18 @@ index 6051a02e5a..4eb7fad809 100644
 +	if (isSoftwareLighting(oldlightmode)) SetFallbackLightMode();
 +	xrHudModelToWorld = &handToWorld;
 +	screen->mBones->Map();
++	int drawn = 0, layers[8] = {};
 +	for (auto &hudsprite : hudsprites)
 +	{
 +		if (!hudsprite.mframe || !hudsprite.weapon || hudsprite.weapon->GetID() >= PSP_TARGETCENTER) continue;
 +		if (XrIsLeftLayer(hudsprite) != left) continue;
++		if (drawn < 8) layers[drawn] = hudsprite.weapon->GetID();
++		drawn++;
 +		DrawPSprite(&hudsprite, state);
 +	}
++	if (xr_trace())
++		xr_log("hand model %s: %d layer(s) %d %d %d, pos %.1f %.1f %.1f fwd %.2f %.2f %.2f up %.2f %.2f %.2f", left ? "left" : "right", drawn,
++			layers[0], layers[1], layers[2], H.x, H.y, H.z, H.fx, H.fy, H.fz, H.ux, H.uy, H.uz);
 +	screen->mBones->Unmap();
 +	xrHudModelToWorld = nullptr;
 +	lightmode = oldlightmode;

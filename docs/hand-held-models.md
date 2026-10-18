@@ -13,7 +13,7 @@ Standard GZDoom/UZDoom `MODELDEF` (IQM, OBJ, MD3; not glTF, convert it in Blende
   the shots go). For OBJ the loader expects +x forward, +y up, +z left. MODELDEF `Offset`, `AngleOffset`,
   `PitchOffset` and `RollOffset` move and turn the model relative to the controller.
 - **Tilt.** `vr_weapon_model_pitch` (degrees) tips every model up or down from the aim direction.
-- **Roll.** Like the sprite, a model stays upright unless `vr_weapon_roll` is on.
+- **Roll.** A model follows the full controller rotation, wrist roll included. `vr_weapon_model_roll 0` keeps it upright (like the sprite, `vr_weapon_roll`).
 - **Raise/lower.** The engine's weapon raise/lower tilt still applies.
 
 ## Test pack
