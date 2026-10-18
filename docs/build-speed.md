@@ -1,0 +1,29 @@
+# Build speed
+
+Measured on a MacBook (8 cores, 8 GB), debug build, arm64-v8a only, ccache 4.14. Run `scripts/measure-build.sh`
+to reproduce (it writes `build-timings.txt`); `brew install ccache` first.
+
+| Scenario | Before | After |
+| --- | --- | --- |
+| Cold, empty ccache | 205-268 s | 252-299 s (precompiled headers are off, so more to compile once) |
+| Wipe `app/.cxx`, warm ccache | 139 s | 47 s (commit ab85461) |
+| Touch one .cpp | 5 s | 5 s |
+| No change | - | 3 s |
+
+What made the difference:
+
+- ccache is used automatically when installed (`-DDOOMXR_NO_CCACHE=ON` opts out).
+- Precompiled headers are disabled when ccache is used: ccache cannot reuse a compile that uses a PCH, which was
+  nearly all of the engine (422 compiles, ninja 95 s -> 12.7 s).
+- Host tools (re2c, lemon, zipdir) live in `app/build/doomxr-host-tools/<key>` and survive a re-configure.
+- CI restores the Gradle and ccache caches.
+
+Warm rebuild breakdown at ab85461: CMake configure ~31 s (226 `try_compile` calls, 181 of them from SDL2, 21.4 s),
+ninja 13 s, linking `libmain.so` 2.1 s. Linker flags (`--gdb-index`, split DWARF) are therefore not worth it, and
+Bazel is not needed.
+
+Tried and dropped for now (commit 75b369b, reverted): `CCACHE_BASEDIR`/`CCACHE_NOHASHDIR` in the compiler launcher
+and replaying recorded SDL2 feature checks from a generated file. The generator found only 57 of SDL2's 181
+checks (their variable names are built dynamically), so it did not deliver the expected saving. If revisited,
+record the cache entries that appear during `add_subdirectory(SDL)` (snapshot `CACHE_VARIABLES` before and
+after) instead of guessing names from SDL's CMake files. Target then: warm rebuild of about 25 s.

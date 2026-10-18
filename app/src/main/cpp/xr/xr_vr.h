@@ -68,6 +68,28 @@ float xr_take_head_pitch_delta(void);
 // Next frame, treat the current head pose as "forward".
 void xr_recenter(void);
 
+// ---- controller pose for aiming and the weapon ----
+// World-space pose of a hand's aim ray in Doom map units. The caller passes the position the recenter point maps to
+// (the player's eye position), the player's heading in degrees (Doom: counter-clockwise), horizontal map units per
+// meter and the level's pixel stretch (the same mapping as the head position uses). Without a valid controller
+// pose (not tracked, not held) a pose in front of the head is made up, so the game stays playable with head aim.
+typedef struct DoomXrHand
+{
+	double x, y, z;			// position of the hand
+	double fx, fy, fz;		// aim direction (unit, Doom world axes: x east, y north, z up)
+	double rx, ry, rz;		// the hand's right
+	double ux, uy, uz;		// the hand's up
+	double yaw, pitch;		// aim direction as Doom angles in degrees (pitch positive = down)
+} DoomXrHand;
+int xr_get_hand(int hand, double baseX, double baseY, double baseZ, double baseYawDeg, double unitsPerMeter,
+                double pixelStretch, DoomXrHand *out);
+
+// ---- head-locked HUD ----
+// Copies the finished HUD image (framebuffer srcFbo, srcW x srcH, cleared to transparent before drawing) into the
+// screen swapchain and shows it for this frame as a quad in front of the head: width and distance in meters, drop =
+// how far below the line of sight its centre sits.
+void xr_hud_blit(unsigned srcFbo, int srcW, int srcH, float width, float distance, float drop);
+
 #ifdef __cplusplus
 }
 #endif
