@@ -15,7 +15,9 @@ t() { # t <label> <command...>
 { echo "date: $(date)"; echo "ccache: $(command -v ccache || echo none)"; ./gradlew --version | sed -n 1,6p; } | tee -a "$out"
 [ -x "$(command -v ccache)" ] && ccache -z >/dev/null
 
-t 1-clean-full ./gradlew clean assembleDebug --profile
+# `gradlew clean` runs CMake configure, which needs the patched UZDoom sources, so wipe the outputs directly.
+rm -rf app/.cxx app/build
+t 1-clean-full ./gradlew assembleDebug --profile
 t 2-noop       ./gradlew assembleDebug
 touch app/src/main/cpp/xr/xr_vr.cpp
 t 3-touch-one-cpp ./gradlew assembleDebug
