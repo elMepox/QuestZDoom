@@ -1,0 +1,381 @@
+diff --git a/src/common/rendering/gles/gles_postprocess.cpp b/src/common/rendering/gles/gles_postprocess.cpp
+index c89748f..2cf8318 100644
+--- a/src/common/rendering/gles/gles_postprocess.cpp
++++ b/src/common/rendering/gles/gles_postprocess.cpp
+@@ -36,6 +36,14 @@
+ 
+ #include "hw_vrmodes.h"
+ #include "v_draw.h"
++#ifdef DOOMXR_OPENXR
++#include "xr_vr.h"
++#include "menustate.h"
++#include "c_console.h"
++EXTERN_CVAR(Float, vr_hud_width)
++EXTERN_CVAR(Float, vr_hud_distance)
++EXTERN_CVAR(Float, vr_hud_drop)
++#endif
+ 
+ extern bool vid_hdr_active;
+ 
+@@ -81,6 +89,24 @@ void FGLRenderer::Flush()
+ 
+ void FGLRenderer::CopyToBackbuffer(const IntRect *bounds, bool applyGamma)
+ {
++#ifdef DOOMXR_OPENXR
++	if (!bounds && xr_frame_active() && framebuffer->xrEyesRendered && menuactive == MENU_Off && ConsoleState == c_up)
++	{
++		// Gameplay in the headset: the eyes were already handed to the compositor. The 2D layer (status bar, messages)
++		// is drawn on a cleared, transparent scene buffer and shown as a quad locked to the head.
++		mBuffers->BindCurrentFB();
++		glDisable(GL_SCISSOR_TEST);
++		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
++		glClearColor(0.f, 0.f, 0.f, 0.f);
++		glClear(GL_COLOR_BUFFER_BIT);
++		screen->Draw2D();
++		twod->Clear();
++		GLint fbo = 0;
++		glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
++		xr_hud_blit((unsigned)fbo, screen->mScreenViewport.width, screen->mScreenViewport.height, vr_hud_width, vr_hud_distance, vr_hud_drop);
++		return;
++	}
++#endif
+ #ifdef NO_RENDER_BUFFER
+ 	mBuffers->BindOutputFB();
+ #endif
+diff --git a/src/common/rendering/hwrenderer/data/hw_vrmodes.cpp b/src/common/rendering/hwrenderer/data/hw_vrmodes.cpp
+index 29c698d..c52a9cd 100644
+--- a/src/common/rendering/hwrenderer/data/hw_vrmodes.cpp
++++ b/src/common/rendering/hwrenderer/data/hw_vrmodes.cpp
+@@ -47,6 +47,15 @@ CVAR(Float, vr_screendist, 0.80f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG) // METERS
+ // default conversion between (vertical) DOOM units and meters
+ CVAR(Float, vr_hunits_per_meter, 41.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG) // METERS
+ 
++// DoomXR (headset) comfort and layout settings
++CVAR(Bool, vr_viewbob, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)			// walking view bob and weapon sway: off in VR (motion sickness)
++CVAR(Float, vr_hud_width, 1.4f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)		// width of the head-locked HUD, meters
++CVAR(Float, vr_hud_distance, 1.5f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// distance of the HUD from the eyes, meters
++CVAR(Float, vr_hud_drop, 0.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)		// how far the HUD centre sits below the line of sight, meters
++CVAR(Float, vr_weapon_scale, 1.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// size of the hand-held weapon sprite
++CVAR(Float, vr_weapon_tilt, 30.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// how far the weapon sprite is tipped from the controller's up towards its aim direction, degrees
++CVAR(Bool, vr_hand_aim, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)			// shoot from the controller pose (off: from the head/body)
++
+ 
+ #define isqrt2 0.7071067812f
+ static VRMode vrmi_mono = { 1, 1.f, 1.f, 1.f,{ { 0.f, 1.f },{ 0.f, 0.f } }, false };
+diff --git a/src/d_main.cpp b/src/d_main.cpp
+index 2bb16d6..707bcb8 100644
+--- a/src/d_main.cpp
++++ b/src/d_main.cpp
+@@ -382,6 +382,10 @@ bool OkForLocalization(FTextureID texnum, const char* substitute);
+ 
+ void D_DoomLoop ();
+ 
++#ifdef DOOMXR_OPENXR
++#include "xr_vr.h"
++#endif
++
+ #ifdef __ANDROID__
+ // --- DoomXR diagnostics: where is the main thread? A watchdog thread logs the last stage once per second. ---
+ #include <thread>
+@@ -1410,6 +1414,10 @@ void D_Display ()
+ 		twod->Begin(screen->GetWidth(), screen->GetHeight());
+ 		if (!hud_toggled)
+ 		{
++#ifdef DOOMXR_OPENXR
++			// A full-screen flash would turn the head-locked HUD quad into a coloured rectangle.
++			if (!xr_frame_active())
++#endif
+ 			V_DrawBlend(viewsec);
+ 			if (automapactive)
+ 			{
+diff --git a/src/g_statusbar/shared_sbar.cpp b/src/g_statusbar/shared_sbar.cpp
+index af5c83f..4dcfc85 100644
+--- a/src/g_statusbar/shared_sbar.cpp
++++ b/src/g_statusbar/shared_sbar.cpp
+@@ -49,6 +49,9 @@
+ #include "v_video.h"
+ #include "version.h"
+ #include "vm.h"
++#ifdef DOOMXR_OPENXR
++#include "xr_vr.h"
++#endif
+ 
+ #define XHAIRSHRINKSIZE		(1./18)
+ #define XHAIRPICKUPSIZE		(2+XHAIRSHRINKSIZE)
+@@ -995,6 +998,13 @@ DEFINE_ACTION_FUNCTION_NATIVE(DBaseStatusBar, RefreshBackground, RefreshBackgrou
+ 
+ void DBaseStatusBar::DrawCrosshair (double ticFrac)
+ {
++#ifdef DOOMXR_OPENXR
++	// In the headset shots leave the controller, so a crosshair in the middle of the head-locked HUD would lie.
++	if (xr_frame_active())
++	{
++		return;
++	}
++#endif
+ 	if (!crosshairon)
+ 	{
+ 		return;
+diff --git a/src/playsim/p_pspr.cpp b/src/playsim/p_pspr.cpp
+index a2c3ad5..3d07a63 100644
+--- a/src/playsim/p_pspr.cpp
++++ b/src/playsim/p_pspr.cpp
+@@ -42,6 +42,49 @@
+ #include "g_levellocals.h"
+ #include "vm.h"
+ #include "sbar.h"
++#ifdef DOOMXR_OPENXR
++#include "actorinlines.h"
++#include "xr_vr.h"
++EXTERN_CVAR(Int, vr_mode)
++EXTERN_CVAR(Bool, vr_hand_aim)
++EXTERN_CVAR(Float, vr_hunits_per_meter)
++
++// While a weapon action function runs (A_FireBullets, A_FireProjectile, A_Punch, ...), the local player's actor is
++// moved to the right controller's pose, so hitscans and projectiles start at the hand and follow its aim direction.
++// The actor is put back right afterwards; nothing else sees the temporary pose.
++struct XrAimScope
++{
++	AActor *mo = nullptr;
++	DVector3 pos;
++	DAngle yaw, pitch;
++
++	explicit XrAimScope(player_t *p)
++	{
++		if (vr_mode != 15 /*VR_OPENXR*/ || !vr_hand_aim || !xr_is_initialized() || netgame) return;
++		if (p == nullptr || p != &players[consoleplayer] || p->mo == nullptr || (p->cheats & CF_PREDICTING)) return;
++		AActor *m = p->mo;
++		const double stretch = m->Level->info->pixelstretch;
++		DoomXrHand h;
++		if (!xr_get_hand(1, m->X(), m->Y(), p->viewz, m->Angles.Yaw.Degrees(), vr_hunits_per_meter / stretch, stretch, &h)) return;
++		mo = m;
++		pos = m->Pos();
++		yaw = m->Angles.Yaw;
++		pitch = m->Angles.Pitch;
++		// Hitscans and missiles start at Center() - Floorclip + the attack offset: put that point on the hand.
++		const double shootz = m->Center() - m->Floorclip + m->AttackOffset();
++		m->SetXYZ(h.x, h.y, pos.Z + (h.z - shootz));
++		m->Angles.Yaw = DAngle::fromDeg(h.yaw);
++		m->Angles.Pitch = DAngle::fromDeg(h.pitch);
++	}
++	~XrAimScope()
++	{
++		if (mo == nullptr) return;
++		mo->SetXYZ(pos);
++		mo->Angles.Yaw = yaw;
++		mo->Angles.Pitch = pitch;
++	}
++};
++#endif
+ 
+ 
+ // MACROS ------------------------------------------------------------------
+@@ -572,6 +615,9 @@ void DPSprite::SetState(FState *newstate, bool pending)
+ 					FState::StaticGetStateName(newstate).GetChars(), newstate->ActionFunc->PrintableName);
+ 				newstate->ActionFunc = nullptr;
+ 			}
++#ifdef DOOMXR_OPENXR
++			XrAimScope xrAim(Owner);
++#endif
+ 			if (newstate->CallAction(Owner->mo, Caller, &stp, &nextstate))
+ 			{
+ 				// It's possible this call resulted in this very layer being replaced.
+diff --git a/src/playsim/p_user.cpp b/src/playsim/p_user.cpp
+index 23ba8db..79dbe53 100644
+--- a/src/playsim/p_user.cpp
++++ b/src/playsim/p_user.cpp
+@@ -1147,10 +1147,19 @@ DEFINE_ACTION_FUNCTION(_PlayerInfo, GetNoAutostartMap)
+ 	ACTION_RETURN_INT(self->userinfo.GetNoAutostartMap());
+ }
+ 
++#ifdef DOOMXR_OPENXR
++EXTERN_CVAR(Int, vr_mode)
++EXTERN_CVAR(Bool, vr_viewbob)
++// Walking bob and weapon sway make most people sick in a headset: off unless vr_viewbob is set.
++static bool XrNoBob() { return vr_mode == 15 /*VR_OPENXR*/ && !vr_viewbob; }
++#else
++static bool XrNoBob() { return false; }
++#endif
++
+ DEFINE_ACTION_FUNCTION(_PlayerInfo, GetWBobSpeed)
+ {
+ 	PARAM_SELF_STRUCT_PROLOGUE(player_t);
+-	ACTION_RETURN_FLOAT(self->userinfo.GetWBobSpeed());
++	ACTION_RETURN_FLOAT(XrNoBob() ? 0.f : self->userinfo.GetWBobSpeed());
+ }
+ 
+ DEFINE_ACTION_FUNCTION(_PlayerInfo, GetWBobFire)
+@@ -1162,7 +1171,7 @@ DEFINE_ACTION_FUNCTION(_PlayerInfo, GetWBobFire)
+ DEFINE_ACTION_FUNCTION(_PlayerInfo, GetMoveBob)
+ {
+ 	PARAM_SELF_STRUCT_PROLOGUE(player_t);
+-	ACTION_RETURN_FLOAT(self->userinfo.GetMoveBob());
++	ACTION_RETURN_FLOAT(XrNoBob() ? 0. : self->userinfo.GetMoveBob());
+ }
+ 
+ DEFINE_ACTION_FUNCTION(_PlayerInfo, GetFViewBob)
+@@ -1174,7 +1183,7 @@ DEFINE_ACTION_FUNCTION(_PlayerInfo, GetFViewBob)
+ DEFINE_ACTION_FUNCTION(_PlayerInfo, GetStillBob)
+ {
+ 	PARAM_SELF_STRUCT_PROLOGUE(player_t);
+-	ACTION_RETURN_FLOAT(self->userinfo.GetStillBob());
++	ACTION_RETURN_FLOAT(XrNoBob() ? 0. : self->userinfo.GetStillBob());
+ }
+ 
+ //===========================================================================
+diff --git a/src/rendering/hwrenderer/hw_entrypoint.cpp b/src/rendering/hwrenderer/hw_entrypoint.cpp
+index 3374dab..4e9926c 100644
+--- a/src/rendering/hwrenderer/hw_entrypoint.cpp
++++ b/src/rendering/hwrenderer/hw_entrypoint.cpp
+@@ -186,6 +186,8 @@ sector_t* RenderViewpoint(FRenderViewpoint& mainvp, AActor* camera, IntRect* bou
+ 			const double stretch = camera->Level->info->pixelstretch;
+ 			const double scale = vr_hunits_per_meter / stretch;	// horizontal doom units per meter
+ 			const double baseYaw = vp.Angles.Yaw.Degrees();
++			// Right controller pose for the hand-held weapon (same mapping as the head position below).
++			di->xrHandValid = mainview && xr_get_hand(1, vp.Pos.X, vp.Pos.Y, vp.Pos.Z, baseYaw, scale, stretch, &di->xrHand) != 0;
+ 			const double cy = cos(DAngle::fromDeg(baseYaw).Radians()), sy = sin(DAngle::fromDeg(baseYaw).Radians());
+ 			vp.Pos.X += scale * (xrEye.forward * cy + xrEye.right * sy);
+ 			vp.Pos.Y += scale * (xrEye.forward * sy - xrEye.right * cy);
+diff --git a/src/rendering/hwrenderer/scene/hw_drawinfo.cpp b/src/rendering/hwrenderer/scene/hw_drawinfo.cpp
+index e13390d..0921d23 100644
+--- a/src/rendering/hwrenderer/scene/hw_drawinfo.cpp
++++ b/src/rendering/hwrenderer/scene/hw_drawinfo.cpp
+@@ -909,6 +909,7 @@ void HWDrawInfo::DrawCoronas(FRenderState& state)
+ 
+ void HWDrawInfo::EndDrawScene(sector_t * viewsector, FRenderState &state)
+ {
++	auto vrmode = VRMode::GetVRMode(true);
+ 	state.EnableFog(false);
+ 
+ 	/*if (gl_coronas && Coronas.Size() > 0)
+@@ -917,7 +918,7 @@ void HWDrawInfo::EndDrawScene(sector_t * viewsector, FRenderState &state)
+ 	}*/
+ 
+ 	// [BB] HUD models need to be rendered here.
+-	const bool renderHUDModel = IsHUDModelForPlayerAvailable(players[consoleplayer].camera->player);
++	const bool renderHUDModel = IsHUDModelForPlayerAvailable(players[consoleplayer].camera->player) && !vrmode->IsOpenXR();
+ 	if (renderHUDModel)
+ 	{
+ 		// [BB] The HUD model should be drawn over everything else already drawn.
+@@ -949,7 +950,11 @@ void HWDrawInfo::DrawEndScene2D(sector_t * viewsector, FRenderState &state)
+ 	state.EnableDepthTest(false);
+ 	state.EnableMultisampling(false);
+ 
+-	if (!vrmode->IsOpenXR()) DrawPlayerSprites(false, state);	// a screen-fixed weapon is wrong in stereo (stage 4)
++#ifdef DOOMXR_OPENXR
++	if (vrmode->IsOpenXR()) DrawXrPlayerSprites(state);	// in the headset the weapon is held by the controller
++	else
++#endif
++	DrawPlayerSprites(false, state);
+ 
+ 	state.SetNoSoftLightLevel();
+ 
+diff --git a/src/rendering/hwrenderer/scene/hw_drawinfo.h b/src/rendering/hwrenderer/scene/hw_drawinfo.h
+index 70360f1..ce780c7 100644
+--- a/src/rendering/hwrenderer/scene/hw_drawinfo.h
++++ b/src/rendering/hwrenderer/scene/hw_drawinfo.h
+@@ -26,6 +26,9 @@
+ #include "v_video.h"
+ #include "hw_weapon.h"
+ #include "hw_drawlist.h"
++#ifdef DOOMXR_OPENXR
++#include "xr_vr.h"
++#endif
+ 
+ enum EDrawMode
+ {
+@@ -171,6 +174,11 @@ struct HWDrawInfo
+ 	TArray<HWPortal *> Portals;
+ 	TArray<HWDecal *> Decals[2];	// the second slot is for mirrors which get rendered in a separate pass.
+ 	TArray<HUDSprite> hudsprites;	// These may just be stored by value.
++#ifdef DOOMXR_OPENXR
++	DoomXrHand xrHand = {};			// right controller pose in map space (OpenXR eyes only)
++	bool xrHandValid = false;
++	void DrawXrPlayerSprites(FRenderState &state);
++#endif
+ 	//TArray<ACorona*> Coronas;
+ 	uint64_t LastFrameTime = 0;
+ 
+diff --git a/src/rendering/hwrenderer/scene/hw_weapon.cpp b/src/rendering/hwrenderer/scene/hw_weapon.cpp
+index 917b73a..0b23d0f 100644
+--- a/src/rendering/hwrenderer/scene/hw_weapon.cpp
++++ b/src/rendering/hwrenderer/scene/hw_weapon.cpp
+@@ -124,6 +124,78 @@ void HWDrawInfo::DrawPlayerSprites(bool hudModelStep, FRenderState &state)
+ }
+ 
+ 
++#ifdef DOOMXR_OPENXR
++EXTERN_CVAR(Float, vr_hunits_per_meter)
++EXTERN_CVAR(Float, vr_weapon_scale)
++EXTERN_CVAR(Float, vr_weapon_tilt)
++
++//==========================================================================
++//
++// OpenXR: the weapon sprite is a flat picture attached to the right controller.
++//
++// The sprite vertices are screen pixels (see GetWeaponRect); a matrix maps those to map space instead: the
++// bottom centre of the view window sits on the hand, image-right is the controller's right and image-up is the
++// controller's up tipped towards its aim direction by vr_weapon_tilt degrees.
++//
++//==========================================================================
++
++void HWDrawInfo::DrawXrPlayerSprites(FRenderState &state)
++{
++	if (!xrHandValid) return;
++	bool any = false;
++	for (auto &h : hudsprites)
++		if (!h.mframe && h.weapon && h.weapon->GetID() < PSP_TARGETCENTER) { any = true; break; }
++	if (!any) return;
++
++	const double stretch = Level->info->pixelstretch;
++	const double sh = vr_hunits_per_meter / stretch;	// map units per meter, horizontal (as for the head position)
++	const double sv = sh / stretch;						// ... and vertical
++	const double tilt = DAngle::fromDeg(vr_weapon_tilt).Radians();
++	const double ct = cos(tilt), st = sin(tilt);
++	const DoomXrHand &H = xrHand;
++	// Image up: the hand's up tipped towards its aim direction.
++	double iux = H.ux * ct + H.fx * st, iuy = H.uy * ct + H.fy * st, iuz = H.uz * ct + H.fz * st;
++	const double il = sqrt(iux * iux + iuy * iuy + iuz * iuz);
++	if (il > 1e-6) { iux /= il; iuy /= il; iuz /= il; }
++	// Normal of the picture (facing back towards the player).
++	double nx = H.ry * iuz - H.rz * iuy, ny = H.rz * iux - H.rx * iuz, nz = H.rx * iuy - H.ry * iux;
++
++	// Meters per screen pixel: the view window width spans 0.9 m (times vr_weapon_scale).
++	const double k = 0.9 * vr_weapon_scale / (double)viewwidth;
++	const double ax = viewwindowx + viewwidth * 0.5, ay = viewwindowy + viewheight;
++
++	// Directions in map space -> render space (x, z, y), including the unit conversion.
++	auto cu = [&](double x, double y, double z, double *o) { o[0] = x * sh * k; o[1] = z * sv * k; o[2] = y * sh * k; };
++	double u[3], v[3], n[3];
++	cu(H.rx, H.ry, H.rz, u);
++	cu(iux, iuy, iuz, v);
++	cu(nx, ny, nz, n);
++	float m[16] = {
++		(float)u[0], (float)u[1], (float)u[2], 0.f,
++		(float)-v[0], (float)-v[1], (float)-v[2], 0.f,
++		(float)n[0], (float)n[1], (float)n[2], 0.f,
++		(float)(H.x - ax * u[0] + ay * v[0]), (float)(H.z - ax * u[1] + ay * v[1]), (float)(H.y - ax * u[2] + ay * v[2]), 1.f };
++	VSMatrix model;
++	model.loadMatrix(m);
++
++	HWViewpointUniforms vp = VPUniforms;	// the eye's view and projection
++	vp.mViewMatrix.multMatrix(model);
++	vp.CalcDependencies();
++	screen->mViewpoints->SetViewpoint(state, &vp);
++	state.EnableDepthTest(false);
++	state.EnableMultisampling(false);
++
++	auto oldlightmode = lightmode;
++	if (isSoftwareLighting(oldlightmode)) SetFallbackLightMode();
++	for (auto &hudsprite : hudsprites)
++	{
++		if (hudsprite.mframe || !hudsprite.weapon || hudsprite.weapon->GetID() >= PSP_TARGETCENTER) continue;
++		DrawPSprite(&hudsprite, state);
++	}
++	lightmode = oldlightmode;
++}
++#endif
++
+ //==========================================================================
+ //
+ //
