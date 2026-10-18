@@ -1,0 +1,275 @@
+diff --git a/src/common/platform/posix/sdl/i_input.cpp b/src/common/platform/posix/sdl/i_input.cpp
+index 04dfabfa2..32864b805 100644
+--- a/src/common/platform/posix/sdl/i_input.cpp
++++ b/src/common/platform/posix/sdl/i_input.cpp
+@@ -333,13 +333,17 @@ static void XRInputTick()
+ 			const float deg = vr_snap_turn_degrees * (in.turnX > 0 ? 1.f : -1.f);
+ 			G_AddViewAngle((int)lroundf(deg * (65536.f / 360.f)), true);
+ 		}
++		{
++			extern void XrPanelInput(int hover, int touch, float u, float v);
++			XrPanelInput(in.hudHover, in.hudTouch, in.hudU, in.hudV);
++		}
+ 		if (pressed(XRB_B)) C_DoCommand("weapnext");
+ 		if (pressed(XRB_Y)) C_DoCommand("weapprev");
+ 		if (pressed(XRB_RTHUMB))
+ 		{
+-			// Right stick click recentres; with the left grip held it switches the HUD between head and left wrist.
++			// Right stick click recentres; with the left grip held it switches the forearm HUD on and off.
+ 			extern void XrToggleOption(const char *cvarName, const char *label);
+-			if (in.grip[0] > 0.5f) XrToggleOption("vr_hud_wrist", "Wrist HUD");
++			if (in.grip[0] > 0.5f) XrToggleOption("vr_hud_custom", "Forearm HUD");
+ 			else xr_recenter();
+ 		}
+ 		// Left stick click: aim laser; with the left grip held: dual wield.
+diff --git a/src/common/rendering/gles/gles_postprocess.cpp b/src/common/rendering/gles/gles_postprocess.cpp
+index 601f839a7..fcfbec2ba 100644
+--- a/src/common/rendering/gles/gles_postprocess.cpp
++++ b/src/common/rendering/gles/gles_postprocess.cpp
+@@ -45,6 +45,11 @@ EXTERN_CVAR(Float, vr_hud_distance)
+ EXTERN_CVAR(Float, vr_hud_drop)
+ EXTERN_CVAR(Bool, vr_hud_wrist)
+ EXTERN_CVAR(Float, vr_hud_wrist_width)
++EXTERN_CVAR(Float, vr_hud_panel_width)
++EXTERN_CVAR(Bool, vr_hud_panel_watch)
++EXTERN_CVAR(Float, vr_hud_panel_back)
++EXTERN_CVAR(Float, vr_hud_panel_lift)
++extern bool g_xrPanelDrawn;
+ #endif
+ 
+ extern bool vid_hdr_active;
+@@ -106,6 +111,8 @@ void FGLRenderer::CopyToBackbuffer(const IntRect *bounds, bool applyGamma)
+ 		GLint fbo = 0;
+ 		glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
+ 		xr_hud_set_wrist(vr_hud_wrist, vr_hud_wrist_width);
++		xr_hud_set_panel(g_xrPanelDrawn, vr_hud_panel_width, 0.25f, vr_hud_panel_watch, vr_hud_panel_back, vr_hud_panel_lift);
++		g_xrPanelDrawn = false;
+ 		xr_hud_blit((unsigned)fbo, screen->mScreenViewport.width, screen->mScreenViewport.height, vr_hud_width, vr_hud_distance, vr_hud_drop);
+ 		return;
+ 	}
+diff --git a/src/d_main.cpp b/src/d_main.cpp
+index 707bcb896..236d43424 100644
+--- a/src/d_main.cpp
++++ b/src/d_main.cpp
+@@ -384,6 +384,8 @@ void D_DoomLoop ();
+ 
+ #ifdef DOOMXR_OPENXR
+ #include "xr_vr.h"
++EXTERN_CVAR(Bool, vr_hud_custom)
++void XrDrawPanel();
+ #endif
+ 
+ #ifdef __ANDROID__
+@@ -1424,6 +1426,12 @@ void D_Display ()
+ 				primaryLevel->automap->Drawer ((hud_althud && viewheight == SCREENHEIGHT) ? viewheight : StatusBar->GetTopOfStatusbar());
+ 			}
+ 
++#ifdef DOOMXR_OPENXR
++			// The interactive forearm HUD takes the place of the status bar in the headset.
++			const bool xrPanel = vr_hud_custom && xr_frame_active();
++#else
++			const bool xrPanel = false;
++#endif
+ 			// for timing the statusbar code.
+ 			//cycle_t stb;
+ 			//stb.Reset();
+@@ -1440,20 +1448,20 @@ void D_Display ()
+ 				{
+ 					StatusBar->DrawCrosshair(vp.TicFrac);
+ 				}
+-				StatusBar->CallDraw (HUD_AltHud, vp.TicFrac);
++				if (xrPanel) XrDrawPanel(); else StatusBar->CallDraw (HUD_AltHud, vp.TicFrac);
+ 				StatusBar->DrawTopStuff (HUD_AltHud);
+ 			}
+ 			else if (viewheight == SCREENHEIGHT && viewactive && screenblocks > 10)
+ 			{
+ 				EHudState state = DrawFSHUD ? HUD_Fullscreen : HUD_None;
+ 				StatusBar->DrawBottomStuff (state);
+-				StatusBar->CallDraw (state, vp.TicFrac);
++				if (xrPanel) XrDrawPanel(); else StatusBar->CallDraw (state, vp.TicFrac);
+ 				StatusBar->DrawTopStuff (state);
+ 			}
+ 			else
+ 			{
+ 				StatusBar->DrawBottomStuff (HUD_StatusBar);
+-				StatusBar->CallDraw (HUD_StatusBar, vp.TicFrac);
++				if (xrPanel) XrDrawPanel(); else StatusBar->CallDraw (HUD_StatusBar, vp.TicFrac);
+ 				StatusBar->DrawTopStuff (HUD_StatusBar);
+ 			}
+ 			//stb.Unclock();
+diff --git a/src/playsim/p_pspr.cpp b/src/playsim/p_pspr.cpp
+index b4dde9d29..26e124d07 100644
+--- a/src/playsim/p_pspr.cpp
++++ b/src/playsim/p_pspr.cpp
+@@ -45,6 +45,11 @@
+ #ifdef DOOMXR_OPENXR
+ #include "actorinlines.h"
+ #include "xr_vr.h"
++#include "c_dispatch.h"
++#include "v_draw.h"
++#include "v_font.h"
++#include "v_video.h"
++#include "a_weapons.h"
+ #include <android/log.h>
+ #include "p_linetracedata.h"
+ #include <math.h>
+@@ -231,6 +236,159 @@ void XrAimLaser(player_t *p)
+ 	if (p->FindPSprite(PSP_LEFT) != nullptr) XrAimLaserHand(p, 0);
+ }
+ 
++// ---- interactive forearm HUD ----
++// A panel above the left controller: health, armor, ammo of the ready weapon and the weapon slots. The game draws it
++// into the bottom-left corner of the screen image (its aspect is the panel's 512:192, a quarter of the screen high), the
++// OpenXR side lifts it out onto a quad that follows the left hand. Touching a slot with the right fingertip selects it.
++CVAR(Bool, vr_hud_custom, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)			// interactive forearm HUD instead of the status bar
++CVAR(Float, vr_hud_panel_width, 0.22f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// width of the forearm HUD, meters
++CVAR(Bool, vr_hud_panel_watch, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// lie on the back of the forearm like a wristwatch (off: float above the controller)
++CVAR(Float, vr_hud_panel_back, 0.11f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// watch mode: meters behind the controller, towards the elbow
++CVAR(Float, vr_hud_panel_lift, 0.05f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// watch mode: meters off the back of the wrist
++bool g_xrPanelDrawn = false;
++static int g_xrPanelHover = -1;		// slot under the fingertip (1..7), or -1
++
++static const int XR_PANEL_W = 512, XR_PANEL_H = 192;
++static const int XR_SLOT_FIRST = 1, XR_SLOT_LAST = 7;
++
++static void XrSlotCell(int slot, int *x, int *y, int *w, int *h)
++{
++	*x = 12 + (slot - XR_SLOT_FIRST) * 70;
++	*y = 112;
++	*w = 64;
++	*h = 68;
++}
++
++// Panel units (512x192, origin top-left) -> slot or -1. The whole band under the numbers counts, to make touching easy.
++static int XrSlotAt(float px, float py)
++{
++	if (py < 100.f) return -1;
++	for (int slot = XR_SLOT_FIRST; slot <= XR_SLOT_LAST; slot++)
++	{
++		int x, y, w, h;
++		XrSlotCell(slot, &x, &y, &w, &h);
++		if (px >= x - 3 && px < x + w + 3) return slot;
++	}
++	return -1;
++}
++
++static bool XrSlotOwned(player_t *p, int slot)
++{
++	for (int i = 0, n = p->weapons.SlotSize(slot); i < n; i++)
++	{
++		PClassActor *cls = p->weapons.GetWeapon(slot, i);
++		if (cls != nullptr && p->mo->FindInventory(cls)) return true;
++	}
++	return false;
++}
++
++static int XrReadySlot(player_t *p)
++{
++	if (p->ReadyWeapon == nullptr) return -1;
++	int slot = -1, idx = -1;
++	if (p->weapons.LocateWeapon(static_cast<PClassActor *>(p->ReadyWeapon->GetClass()), &slot, &idx)) return slot;
++	return -1;
++}
++
++void XrDrawPanel()
++{
++	player_t *p = &players[consoleplayer];
++	if (p->mo == nullptr) return;
++	const int sw = twod->GetWidth(), sh = twod->GetHeight();
++	const int rh = sh / 4;
++	int rw = rh * XR_PANEL_W / XR_PANEL_H;
++	if (rw > sw) rw = sw;
++	const int x0 = 0, y0 = sh - rh;
++	const double k = (double)rw / XR_PANEL_W;
++	g_xrPanelDrawn = true;
++
++	auto rect = [&](int ux, int uy, int uw, int uh, PalEntry c, float a)
++	{
++		Dim(twod, c, a, x0 + (int)(ux * k), y0 + (int)(uy * k), (int)(uw * k) + 1, (int)(uh * k) + 1);
++	};
++	auto text = [&](int ux, int uy, double scale, int color, const char *str)
++	{
++		DrawText(twod, SmallFont, color, x0 + ux * k, y0 + uy * k, str, DTA_ScaleX, scale * k, DTA_ScaleY, scale * k, TAG_DONE);
++	};
++
++	rect(0, 0, XR_PANEL_W, XR_PANEL_H, 0x0c1218, 0.78f);
++	rect(0, 0, XR_PANEL_W, 3, 0x5fb4ff, 0.9f);
++	rect(0, XR_PANEL_H - 3, XR_PANEL_W, 3, 0x5fb4ff, 0.9f);
++	rect(0, 0, 3, XR_PANEL_H, 0x5fb4ff, 0.9f);
++	rect(XR_PANEL_W - 3, 0, 3, XR_PANEL_H, 0x5fb4ff, 0.9f);
++
++	// numbers and bars: health, armor, ammo
++	const int health = p->health;
++	AActor *armor = p->mo->FindInventory(NAME_BasicArmor, true);
++	const int armorAmt = armor != nullptr ? armor->IntVar(NAME_Amount) : 0;
++	AActor *ammo = nullptr;
++	if (p->ReadyWeapon != nullptr)
++	{
++		ammo = p->ReadyWeapon->PointerVar<AActor>(NAME_Ammo1);
++		if (ammo == nullptr) ammo = p->ReadyWeapon->PointerVar<AActor>(NAME_Ammo2);
++	}
++	const int ammoAmt = ammo != nullptr ? ammo->IntVar(NAME_Amount) : 0;
++	const int ammoMax = ammo != nullptr ? ammo->IntVar(NAME_MaxAmount) : 0;
++
++	struct Stat { int x; const char *label; int value; int maxv; PalEntry bar; int color; bool show; };
++	const Stat stats[3] = {
++		{14, "HEALTH", health, 100, health > 50 ? PalEntry(0x3ddc5a) : (health > 25 ? PalEntry(0xe8c030) : PalEntry(0xe03030)), health > 25 ? CR_GREEN : CR_RED, true},
++		{184, "ARMOR", armorAmt, 100, PalEntry(0x4a90ff), CR_BLUE, true},
++		{354, "AMMO", ammoAmt, ammoMax, PalEntry(0xe8a030), CR_GOLD, ammo != nullptr},
++	};
++	for (const Stat &st : stats)
++	{
++		text(st.x, 8, 1.0, CR_GRAY, st.label);
++		FString num;
++		if (st.show) num.Format("%d", st.value); else num = "--";
++		text(st.x, 24, 3.0, st.color, num.GetChars());
++		rect(st.x, 78, 144, 12, 0x000000, 0.7f);
++		if (st.show && st.maxv > 0)
++		{
++			int fill = st.value * 144 / st.maxv;
++			if (fill > 144) fill = 144;
++			if (fill > 0) rect(st.x, 78, fill, 12, st.bar, 0.95f);
++		}
++	}
++
++	// weapon slots
++	const int ready = XrReadySlot(p);
++	for (int slot = XR_SLOT_FIRST; slot <= XR_SLOT_LAST; slot++)
++	{
++		int x, y, w, h;
++		XrSlotCell(slot, &x, &y, &w, &h);
++		const bool owned = XrSlotOwned(p, slot);
++		if (slot == ready) rect(x - 3, y - 3, w + 6, h + 6, 0xffe040, 0.95f);
++		rect(x, y, w, h, g_xrPanelHover == slot ? PalEntry(0x5a90c0) : (owned ? PalEntry(0x2a3a4c) : PalEntry(0x151c24)), 0.95f);
++		FString n;
++		n.Format("%d", slot);
++		text(x + 20, y + 14, 3.0, owned ? CR_WHITE : CR_DARKGRAY, n.GetChars());
++	}
++}
++
++// Fingertip over / on the panel (position 0..1, origin top-left): highlights the slot, buzzes the right controller when
++// the finger enters a new one, and on touching a slot it owns selects that weapon.
++void XrPanelInput(int hover, int touch, float u, float v)
++{
++	static int wasTouch = 0;
++	int slot = hover ? XrSlotAt(u * XR_PANEL_W, v * XR_PANEL_H) : -1;
++	if (slot != g_xrPanelHover)
++	{
++		if (slot != -1) xr_haptic(1, 0.25f, 0.02f);
++		g_xrPanelHover = slot;
++	}
++	if (touch && !wasTouch && slot != -1 && players[consoleplayer].mo != nullptr
++		&& XrSlotOwned(&players[consoleplayer], slot))
++	{
++		FString cmd;
++		cmd.Format("slot %d", slot);
++		C_DoCommand(cmd.GetChars());
++		xr_haptic(1, 0.8f, 0.05f);
++		__android_log_print(ANDROID_LOG_INFO, "DoomXR-XR", "HUD touch: %s", cmd.GetChars());
++	}
++	wasTouch = touch;
++}
++
+ // Flips a bool option from the controller and says so: on the screen (mid-screen message) and in logcat.
+ void XrToggleOption(const char *cvarName, const char *label)
+ {

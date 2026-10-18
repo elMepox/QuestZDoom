@@ -1,0 +1,53 @@
+diff --git a/src/common/platform/posix/sdl/i_input.cpp b/src/common/platform/posix/sdl/i_input.cpp
+index c95850130..04dfabfa2 100644
+--- a/src/common/platform/posix/sdl/i_input.cpp
++++ b/src/common/platform/posix/sdl/i_input.cpp
+@@ -335,7 +335,13 @@ static void XRInputTick()
+ 		}
+ 		if (pressed(XRB_B)) C_DoCommand("weapnext");
+ 		if (pressed(XRB_Y)) C_DoCommand("weapprev");
+-		if (pressed(XRB_RTHUMB)) xr_recenter();
++		if (pressed(XRB_RTHUMB))
++		{
++			// Right stick click recentres; with the left grip held it switches the HUD between head and left wrist.
++			extern void XrToggleOption(const char *cvarName, const char *label);
++			if (in.grip[0] > 0.5f) XrToggleOption("vr_hud_wrist", "Wrist HUD");
++			else xr_recenter();
++		}
+ 		// Left stick click: aim laser; with the left grip held: dual wield.
+ 		if (pressed(XRB_LTHUMB)) {
+ 			extern void XrToggleOption(const char *cvarName, const char *label);
+diff --git a/src/common/rendering/gles/gles_postprocess.cpp b/src/common/rendering/gles/gles_postprocess.cpp
+index 2cf83181b..601f839a7 100644
+--- a/src/common/rendering/gles/gles_postprocess.cpp
++++ b/src/common/rendering/gles/gles_postprocess.cpp
+@@ -43,6 +43,8 @@
+ EXTERN_CVAR(Float, vr_hud_width)
+ EXTERN_CVAR(Float, vr_hud_distance)
+ EXTERN_CVAR(Float, vr_hud_drop)
++EXTERN_CVAR(Bool, vr_hud_wrist)
++EXTERN_CVAR(Float, vr_hud_wrist_width)
+ #endif
+ 
+ extern bool vid_hdr_active;
+@@ -103,6 +105,7 @@ void FGLRenderer::CopyToBackbuffer(const IntRect *bounds, bool applyGamma)
+ 		twod->Clear();
+ 		GLint fbo = 0;
+ 		glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
++		xr_hud_set_wrist(vr_hud_wrist, vr_hud_wrist_width);
+ 		xr_hud_blit((unsigned)fbo, screen->mScreenViewport.width, screen->mScreenViewport.height, vr_hud_width, vr_hud_distance, vr_hud_drop);
+ 		return;
+ 	}
+diff --git a/src/common/rendering/hwrenderer/data/hw_vrmodes.cpp b/src/common/rendering/hwrenderer/data/hw_vrmodes.cpp
+index c52a9cd0d..0178714d8 100644
+--- a/src/common/rendering/hwrenderer/data/hw_vrmodes.cpp
++++ b/src/common/rendering/hwrenderer/data/hw_vrmodes.cpp
+@@ -52,6 +52,8 @@ CVAR(Bool, vr_viewbob, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)			// walking vie
+ CVAR(Float, vr_hud_width, 1.4f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)		// width of the head-locked HUD, meters
+ CVAR(Float, vr_hud_distance, 1.5f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// distance of the HUD from the eyes, meters
+ CVAR(Float, vr_hud_drop, 0.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)		// how far the HUD centre sits below the line of sight, meters
++CVAR(Bool, vr_hud_wrist, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)			// show the HUD above the left controller instead of in front of the head
++CVAR(Float, vr_hud_wrist_width, 0.3f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// width of the wrist HUD, meters
+ CVAR(Float, vr_weapon_scale, 1.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// size of the hand-held weapon sprite
+ CVAR(Float, vr_weapon_tilt, 30.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// how far the weapon sprite is tipped from the controller's up towards its aim direction, degrees
+ CVAR(Bool, vr_hand_aim, true, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)			// shoot from the controller pose (off: from the head/body)
