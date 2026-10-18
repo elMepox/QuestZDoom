@@ -12,6 +12,21 @@ index 9de1b64863..a4548c78f2 100644
  	VSMatrix objectToWorldMatrix;
  	di->VPUniforms.mViewMatrix.inverseMatrix(objectToWorldMatrix);
  	return objectToWorldMatrix;
+diff --git a/src/rendering/hwrenderer/scene/hw_drawinfo.cpp b/src/rendering/hwrenderer/scene/hw_drawinfo.cpp
+index 0921d234a5..212426c5e5 100644
+--- a/src/rendering/hwrenderer/scene/hw_drawinfo.cpp
++++ b/src/rendering/hwrenderer/scene/hw_drawinfo.cpp
+@@ -919,6 +919,10 @@ void HWDrawInfo::EndDrawScene(sector_t * viewsector, FRenderState &state)
+ 
+ 	// [BB] HUD models need to be rendered here.
+ 	const bool renderHUDModel = IsHUDModelForPlayerAvailable(players[consoleplayer].camera->player) && !vrmode->IsOpenXR();
++#ifdef DOOMXR_OPENXR
++	if (xr_trace())
++		xr_log("EndDrawScene: openxr=%d hudModelSceneDraw=%d di %p", (int)vrmode->IsOpenXR(), (int)renderHUDModel, (void *)this);
++#endif
+ 	if (renderHUDModel)
+ 	{
+ 		// [BB] The HUD model should be drawn over everything else already drawn.
 diff --git a/src/rendering/hwrenderer/scene/hw_drawinfo.h b/src/rendering/hwrenderer/scene/hw_drawinfo.h
 index 13c41b70f3..59944e9ce7 100644
 --- a/src/rendering/hwrenderer/scene/hw_drawinfo.h
@@ -26,7 +41,7 @@ index 13c41b70f3..59944e9ce7 100644
  	//TArray<ACorona*> Coronas;
  	uint64_t LastFrameTime = 0;
 diff --git a/src/rendering/hwrenderer/scene/hw_weapon.cpp b/src/rendering/hwrenderer/scene/hw_weapon.cpp
-index 6051a02e5a..b061c6a8ae 100644
+index 6051a02e5a..0d918ced3f 100644
 --- a/src/rendering/hwrenderer/scene/hw_weapon.cpp
 +++ b/src/rendering/hwrenderer/scene/hw_weapon.cpp
 @@ -36,6 +36,7 @@
@@ -103,7 +118,7 @@ index 6051a02e5a..b061c6a8ae 100644
  	// Image up: the hand's up tipped towards its aim direction.
  	double iux = H.ux * ct + H.fx * st, iuy = H.uy * ct + H.fy * st, iuz = H.uz * ct + H.fz * st;
  	const double il = sqrt(iux * iux + iuy * iuy + iuz * iuz);
-@@ -223,6 +232,81 @@ void HWDrawInfo::DrawXrHandSprites(FRenderState &state, const DoomXrHand &hand,
+@@ -223,6 +232,82 @@ void HWDrawInfo::DrawXrHandSprites(FRenderState &state, const DoomXrHand &hand,
  	}
  	lightmode = oldlightmode;
  }
@@ -154,9 +169,9 @@ index 6051a02e5a..b061c6a8ae 100644
 +	handToWorld.loadMatrix(m);
 +
 +	screen->mViewpoints->SetViewpoint(state, &VPUniforms);	// the eye's view and projection
++	state.SetDepthMask(true);	// glClear leaves the depth buffer alone while the depth mask is off
 +	state.Clear(CT_Depth);
 +	state.EnableDepthTest(true);
-+	state.SetDepthMask(true);
 +	state.EnableMultisampling(false);
 +	state.EnableFog(false);
 +
@@ -174,8 +189,9 @@ index 6051a02e5a..b061c6a8ae 100644
 +		DrawPSprite(&hudsprite, state);
 +	}
 +	if (xr_trace())
-+		xr_log("hand model %s: %d layer(s) %d %d %d, pos %.1f %.1f %.1f fwd %.2f %.2f %.2f up %.2f %.2f %.2f", left ? "left" : "right", drawn,
-+			layers[0], layers[1], layers[2], H.x, H.y, H.z, H.fx, H.fy, H.fz, H.ux, H.uy, H.uz);
++		xr_log("hand model %s: di %p, %d layer(s) %d %d %d, pos %.1f %.1f %.1f fwd %.2f %.2f %.2f up %.2f %.2f %.2f, view origin %.2f %.2f %.2f", left ? "left" : "right",
++			(void *)this, drawn, layers[0], layers[1], layers[2], H.x, H.y, H.z, H.fx, H.fy, H.fz, H.ux, H.uy, H.uz,
++			VPUniforms.mViewMatrix.get()[12], VPUniforms.mViewMatrix.get()[13], VPUniforms.mViewMatrix.get()[14]);
 +	screen->mBones->Unmap();
 +	xrHudModelToWorld = nullptr;
 +	lightmode = oldlightmode;
