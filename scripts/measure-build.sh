@@ -22,8 +22,11 @@ t 2-noop       ./gradlew assembleDebug
 touch app/src/main/cpp/xr/xr_vr.cpp
 t 3-touch-one-cpp ./gradlew assembleDebug
 rm -rf app/.cxx app/build/intermediates/cxx
-t 4-reconfigure-warm-ccache ./gradlew assembleDebug -PdoomxrCmakeProfile="$PWD/build-cmake-configure-trace.json"
+t 4-reconfigure-warm-ccache ./gradlew assembleDebug
+# The profile flag changes the CMake arguments (and so the build dir), so it gets its own step.
+rm -rf app/.cxx app/build/intermediates/cxx
+t 5-reconfigure-with-cmake-trace ./gradlew assembleDebug -PdoomxrCmakeProfile="$PWD/build-cmake-configure-trace.json"
 
 [ -x "$(command -v ccache)" ] && { echo "--- ccache stats"; ccache -s; } | tee -a "$out"
-echo "cmake configure trace of step 4: build-cmake-configure-trace.json (ui.perfetto.dev)" | tee -a "$out"
+echo "cmake configure trace of step 5: build-cmake-configure-trace.json (ui.perfetto.dev)" | tee -a "$out"
 echo "gradle profile reports: build/reports/profile/" | tee -a "$out"
