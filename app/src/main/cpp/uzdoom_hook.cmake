@@ -43,7 +43,22 @@ set(SDL2_INCLUDE_DIR "${CMAKE_BINARY_DIR}/sdl2-include" CACHE PATH "" FORCE)
 set(SDL2_LIBRARY_TEMP SDL2 CACHE STRING "" FORCE)   # link by target name
 
 # --- 2. host tools -----------------------------------------------------------------------------
+# The host tools do not depend on the Android build, so keep them outside the CMake build dir (which
+# Gradle recreates on every re-configure) in a directory keyed by everything they are built from.
 set(_host_bin "${CMAKE_BINARY_DIR}/host-tools")
+if(DOOMXR_HOST_TOOLS_CACHE)
+  execute_process(COMMAND git -C "${_uz}" rev-parse HEAD OUTPUT_VARIABLE _uz_head
+                  OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  file(GLOB _patches "${DOOMXR_PATCH_DIR}/*.patch")
+  set(_key "${_uz_head}")
+  foreach(_f ${_patches} "${DOOMXR_HOST_TOOLS_SRC}/CMakeLists.txt")
+    file(SHA256 "${_f}" _h)
+    string(APPEND _key "${_h}")
+  endforeach()
+  string(SHA256 _key "${_key}")
+  string(SUBSTRING "${_key}" 0 16 _key)
+  set(_host_bin "${DOOMXR_HOST_TOOLS_CACHE}/${_key}")
+endif()
 if(NOT EXISTS "${_host_bin}/ImportExecutables.cmake")
   message(STATUS "Building host tools (re2c, lemon, zipdir)")
   execute_process(
