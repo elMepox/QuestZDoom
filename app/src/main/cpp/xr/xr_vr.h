@@ -57,6 +57,8 @@ typedef struct DoomXrInput
 	int uiHit;					// the pointing hand's ray hits the floating 2D screen
 	float uiU, uiV;				// hit position on the screen, 0..1, origin top-left
 	int uiHand;					// hand doing the pointing
+	int hudHover, hudTouch;		// right fingertip near / touching the forearm HUD panel
+	float hudU, hudV;			// touch position on the panel, 0..1, origin top-left
 } DoomXrInput;
 // Latest controller state (valid after the first running frame). Returns 0 while there is no session/focus.
 int xr_input_poll(DoomXrInput *out);
@@ -92,6 +94,10 @@ void xr_hud_blit(unsigned srcFbo, int srcW, int srcH, float width, float distanc
 // Wrist mode: show the HUD as a small panel (width in meters) above the left controller instead; without a tracked left
 // controller it stays in front of the head. Set before xr_hud_blit each frame.
 void xr_hud_set_wrist(int on, float width);
+
+// Interactive panel mode: the bottom stripFrac of the HUD image goes to a small panel (width in meters) above the left
+// controller that can be touched with the right fingertip (DoomXrInput.hud*). Set before xr_hud_blit each frame.
+void xr_hud_set_panel(int on, float width, float stripFrac);
 
 // ---- app switching ----
 // Leaves the game and shows the 2D mod library panel (implemented through DoomXRActivity.returnToLibrary).

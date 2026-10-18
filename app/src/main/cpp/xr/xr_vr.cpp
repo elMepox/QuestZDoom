@@ -82,6 +82,10 @@ struct State
 	XrPosef aim[2];
 	float appliedPitch = 0;
 	Swap laser;			// tiny swapchain for the laser pointer quad
+	Swap panel;			// interactive forearm HUD panel
+	bool panelOn = false, panelDrawn = false, panelShown = false;
+	float panelW = 0.3f, panelFrac = 0.25f;	// panelFrac: height of the panel's corner of the screen image, as a fraction of its height
+	bool panelHover = false;
 	bool laserHit = false;
 	float laserLen = 0;
 
@@ -393,6 +397,54 @@ bool hitScreen(const XrPosef &aim, float *u, float *v, float *dist)
 	return true;
 }
 
+// Pose of the interactive HUD panel: upright, a hand's width above the left controller, turned towards the head.
+bool computePanelPose(float w, XrPosef *out)
+{
+	if (!g.aimValid[0]) return false;
+	const XrPosef &a = g.aim[0];
+	const Vec3 up = rotate(a.orientation, {0, 1, 0});
+	const Vec3 c = {a.position.x + up.x * 0.12f, a.position.y + up.y * 0.12f, a.position.z + up.z * 0.12f};
+	const Vec3 head = {0.5f * (g.views[0].pose.position.x + g.views[1].pose.position.x),
+	                   0.5f * (g.views[0].pose.position.y + g.views[1].pose.position.y),
+	                   0.5f * (g.views[0].pose.position.z + g.views[1].pose.position.z)};
+	Vec3 z = {head.x - c.x, head.y - c.y, head.z - c.z};
+	const float zl = sqrtf(z.x * z.x + z.y * z.y + z.z * z.z);
+	if (zl < 1e-3f) return false;
+	z = {z.x / zl, z.y / zl, z.z / zl};
+	Vec3 x = {z.z, 0.f, -z.x};	// cross(world up, z)
+	const float xl = sqrtf(x.x * x.x + x.z * x.z);
+	if (xl < 1e-3f) return false;
+	x = {x.x / xl, 0.f, x.z / xl};
+	const Vec3 y = {z.y * x.z - z.z * x.y, z.z * x.x - z.x * x.z, z.x * x.y - z.y * x.x};	// cross(z, x)
+	out->orientation = quatFromBasis(x, y, z);
+	out->position = {c.x, c.y, c.z};
+	(void)w;
+	return true;
+}
+
+// Fingertip of the right controller against the panel: hover when within 12 cm in front of it, touch within 2 cm.
+void updatePanelTouch(DoomXrInput &in)
+{
+	g.panelHover = false;
+	if (!g.panelOn || !g.panelShown || !g.aimValid[1]) return;
+	XrPosef p;
+	if (!computePanelPose(g.panelW, &p)) return;
+	const float w = g.panelW, h = g.panelW * (float)g.panel.height / (float)g.panel.width;
+	const XrPosef &r = g.aim[1];
+	const Vec3 fwd = rotate(r.orientation, {0, 0, -1});
+	const Vec3 tip = {r.position.x + fwd.x * 0.04f - p.position.x, r.position.y + fwd.y * 0.04f - p.position.y,
+	                  r.position.z + fwd.z * 0.04f - p.position.z};
+	const XrQuaternionf inv = {-p.orientation.x, -p.orientation.y, -p.orientation.z, p.orientation.w};
+	const Vec3 l = rotate(inv, tip);
+	const float m = 0.02f;
+	if (fabsf(l.x) > w * 0.5f + m || fabsf(l.y) > h * 0.5f + m || l.z > 0.12f || l.z < -0.03f) return;
+	g.panelHover = true;
+	in.hudHover = 1;
+	in.hudTouch = l.z < 0.02f;
+	in.hudU = fminf(fmaxf(l.x / w + 0.5f, 0.f), 1.f);
+	in.hudV = fminf(fmaxf(0.5f - l.y / h, 0.f), 1.f);
+}
+
 // Reads all actions for this frame (called from xr_frame_begin after the session is running).
 void updateInput()
 {
@@ -447,6 +499,7 @@ void updateInput()
 			g.laserLen = t;
 		}
 	}
+	updatePanelTouch(in);
 	g.input = in;
 }
 
@@ -622,6 +675,7 @@ int xr_init(void)
 		return 0;
 
 	if (!createSwapchain(g.laser, format, 8, 8)) LOGW("laser swapchain unavailable");
+	if (!createSwapchain(g.panel, format, 512, 192)) LOGW("panel swapchain unavailable");
 	g.ok = true;
 	LOGI("OpenXR initialized");
 	return 1;
@@ -736,6 +790,25 @@ void xr_hud_blit(unsigned srcFbo, int sw, int sh, float width, float distance, f
 	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
 	glBlitFramebuffer(0, 0, sw, sh, 0, 0, g.ui.width, g.ui.height, GL_COLOR_BUFFER_BIT,
 	                  (sw == g.ui.width && sh == g.ui.height) ? GL_NEAREST : GL_LINEAR);
+	const int regionH = (int)(sh * g.panelFrac);
+	const int regionW = (int)(regionH * (float)g.panel.width / (float)(g.panel.height > 0 ? g.panel.height : 1));
+	if (g.panelOn && g.panel.handle != XR_NULL_HANDLE && regionH > 0 && regionW > 0 && regionW <= sw)
+	{
+		// Interactive panel: the game drew it in the bottom-left corner of the screen image; move it to its own
+		// swapchain and cut it out of the head-locked image.
+		if (GLuint pfbo = acquire(g.panel))
+		{
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, pfbo);
+			glBlitFramebuffer(0, 0, regionW, regionH, 0, 0, g.panel.width, g.panel.height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+			g.panelDrawn = true;
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+			static const GLfloat clear[4] = {0, 0, 0, 0};
+			glEnable(GL_SCISSOR_TEST);
+			glScissor(0, 0, regionW * g.ui.width / sw + 1, regionH * g.ui.height / sh + 1);
+			glClearBufferfv(GL_COLOR, 0, clear);
+			glDisable(GL_SCISSOR_TEST);
+		}
+	}
 	glBindFramebuffer(GL_READ_FRAMEBUFFER, prevRead);
 	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevDraw);
 	if (scissor) glEnable(GL_SCISSOR_TEST);
@@ -749,6 +822,13 @@ void xr_hud_set_wrist(int on, float width)
 {
 	g.hudWrist = on != 0;
 	g.hudWristW = width < 0.05f ? 0.05f : (width > 1.5f ? 1.5f : width);
+}
+
+void xr_hud_set_panel(int on, float width, float stripFrac)
+{
+	g.panelOn = on != 0;
+	g.panelW = width < 0.1f ? 0.1f : (width > 0.8f ? 0.8f : width);
+	g.panelFrac = stripFrac < 0.1f ? 0.1f : (stripFrac > 0.5f ? 0.5f : stripFrac);
 }
 
 int xr_frame_active(void) { return g.active ? 1 : 0; }
@@ -930,6 +1010,7 @@ int xr_frame_end(int uiWanted)
 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev);
 	}
 	release(g.ui);
+	release(g.panel);
 
 	if (showUi && !g.uiWasShown)
 	{
@@ -1021,6 +1102,22 @@ int xr_frame_end(int uiWanted)
 			}
 		}
 		layers[nl++] = (const XrCompositionLayerBaseHeader *)&hudQuad;
+	}
+
+	// Interactive forearm HUD panel above the left controller (drawn by the game, touched with the right hand).
+	XrCompositionLayerQuad panelQuad = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+	XrPosef pp;
+	if (!showUi && g.panelOn && g.panelDrawn && g.shouldRender && computePanelPose(g.panelW, &pp))
+	{
+		panelQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+		panelQuad.space = g.space;
+		panelQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+		panelQuad.subImage.swapchain = g.panel.handle;
+		panelQuad.subImage.imageRect.offset = {0, 0};
+		panelQuad.subImage.imageRect.extent = {g.panel.width, g.panel.height};
+		panelQuad.pose = pp;
+		panelQuad.size = {g.panelW, g.panelW * (float)g.panel.height / (float)g.panel.width};
+		layers[nl++] = (const XrCompositionLayerBaseHeader *)&panelQuad;
 	}
 
 	// Laser pointer: a thin quad from the pointing hand to the screen, drawn after (in front of) it.
@@ -1115,6 +1212,8 @@ int xr_frame_end(int uiWanted)
 	g.frameNo++;
 
 	g.hudWanted = false;
+	g.panelShown = g.panelDrawn;
+	g.panelDrawn = false;
 	g.frameBegun = false;
 	g.active = false;
 	return 1;
