@@ -38,7 +38,6 @@ android {
                     "-DDOOMXR_HOST_TOOLS_SRC=${file("src/main/cpp/host-tools").absolutePath}",
                     // Host tools survive a CMake re-configure (see uzdoom_hook.cmake).
                     "-DDOOMXR_HOST_TOOLS_CACHE=${layout.buildDirectory.dir("doomxr-host-tools").get().asFile.absolutePath}",
-                    "-DDOOMXR_ROOT_DIR=${rootProject.projectDir.absolutePath}",
                     "-DDOOMXR_PATCH_DIR=${rootProject.layout.projectDirectory.dir("patches/uzdoom").asFile.absolutePath}",
                     "-DCMAKE_PROJECT_UZDoom_INCLUDE=${file("src/main/cpp/uzdoom_hook.cmake").absolutePath}",
                     // UZDoom options
