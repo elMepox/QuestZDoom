@@ -83,6 +83,7 @@ struct State
 	float appliedPitch = 0;
 	Swap laser;			// tiny swapchain for the laser pointer quad
 	Swap panel;			// interactive forearm HUD panel
+	struct Beam { Swap sw; float len = 0; unsigned lastFrame = 0; bool used = false; float rgb[3] = {1, 1, 1}; } beam[2];	// aim lasers, one per hand
 	bool panelOn = false, panelDrawn = false, panelShown = false;
 	float panelW = 0.3f, panelFrac = 0.25f;	// panelFrac: height of the panel's corner of the screen image, as a fraction of its height
 	bool panelHover = false;
@@ -697,6 +698,7 @@ int xr_init(void)
 
 	if (!createSwapchain(g.laser, format, 8, 8)) LOGW("laser swapchain unavailable");
 	if (!createSwapchain(g.panel, format, 512, 192)) LOGW("panel swapchain unavailable");
+	for (auto &b : g.beam) if (!createSwapchain(b.sw, format, 8, 8)) LOGW("beam swapchain unavailable");
 	g.ok = true;
 	LOGI("OpenXR initialized");
 	return 1;
@@ -843,6 +845,18 @@ void xr_hud_set_wrist(int on, float width)
 {
 	g.hudWrist = on != 0;
 	g.hudWristW = width < 0.05f ? 0.05f : (width > 1.5f ? 1.5f : width);
+}
+
+void xr_laser_set(int hand, float lengthMeters, unsigned rgb)
+{
+	if (hand < 0 || hand > 1) return;
+	auto &b = g.beam[hand];
+	b.len = lengthMeters;
+	b.rgb[0] = ((rgb >> 16) & 255) / 255.f;
+	b.rgb[1] = ((rgb >> 8) & 255) / 255.f;
+	b.rgb[2] = (rgb & 255) / 255.f;
+	b.lastFrame = g.frameNo;
+	b.used = true;
 }
 
 void xr_hud_set_panel(int on, float width, float stripFrac, int watch, float back, float lift)
@@ -1054,7 +1068,7 @@ int xr_frame_end(int uiWanted)
 	XrCompositionLayerProjectionView pv[2];
 	XrCompositionLayerProjection proj = {XR_TYPE_COMPOSITION_LAYER_PROJECTION};
 	XrCompositionLayerQuad quad = {XR_TYPE_COMPOSITION_LAYER_QUAD};
-	const XrCompositionLayerBaseHeader *layers[3];
+	const XrCompositionLayerBaseHeader *layers[10];
 	uint32_t nl = 0;
 
 	if (g.active && g.eyeDone[0] && g.eyeDone[1])
@@ -1142,6 +1156,58 @@ int xr_frame_end(int uiWanted)
 		panelQuad.pose = pp;
 		panelQuad.size = {g.panelW, g.panelW * (float)g.panel.height / (float)g.panel.width};
 		layers[nl++] = (const XrCompositionLayerBaseHeader *)&panelQuad;
+	}
+
+	// Aim lasers (gameplay): a solid beam from each hand along its aim to where the shot lands, and a dot at the end.
+	XrCompositionLayerQuad beamQuad[2] = {{XR_TYPE_COMPOSITION_LAYER_QUAD}, {XR_TYPE_COMPOSITION_LAYER_QUAD}};
+	XrCompositionLayerQuad dotQuad[2] = {{XR_TYPE_COMPOSITION_LAYER_QUAD}, {XR_TYPE_COMPOSITION_LAYER_QUAD}};
+	for (int h = 0; h < 2 && !showUi && g.shouldRender; h++)
+	{
+		auto &b = g.beam[h];
+		if (!b.used || g.frameNo - b.lastFrame > 6 || b.len < 0.03f || !g.aimValid[h] || b.sw.handle == XR_NULL_HANDLE) continue;
+		if (GLuint fbo = acquire(b.sw))
+		{
+			GLint prev = 0;
+			glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev);
+			GLboolean sc = glIsEnabled(GL_SCISSOR_TEST);
+			glDisable(GL_SCISSOR_TEST);
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+			const GLfloat col[4] = {b.rgb[0], b.rgb[1], b.rgb[2], 0.9f};
+			glClearBufferfv(GL_COLOR, 0, col);
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev);
+			if (sc) glEnable(GL_SCISSOR_TEST);
+			release(b.sw);
+		}
+		else continue;
+		const XrPosef &a = g.aim[h];
+		const Vec3 dir = rotate(a.orientation, {0, 0, -1});
+		const Vec3 head = {0.5f * (g.views[0].pose.position.x + g.views[1].pose.position.x),
+		                   0.5f * (g.views[0].pose.position.y + g.views[1].pose.position.y),
+		                   0.5f * (g.views[0].pose.position.z + g.views[1].pose.position.z)};
+		const float len = b.len > 60.f ? 60.f : b.len;
+		auto place = [&](XrCompositionLayerQuad &q, Vec3 mid, float sx, float sy) {
+			const Vec3 toHead = {head.x - mid.x, head.y - mid.y, head.z - mid.z};
+			const float dd = toHead.x * dir.x + toHead.y * dir.y + toHead.z * dir.z;
+			Vec3 z = {toHead.x - dir.x * dd, toHead.y - dir.y * dd, toHead.z - dir.z * dd};
+			const float zl = sqrtf(z.x * z.x + z.y * z.y + z.z * z.z);
+			if (zl < 1e-4f) return false;
+			z = {z.x / zl, z.y / zl, z.z / zl};
+			const Vec3 y = {z.y * dir.z - z.z * dir.y, z.z * dir.x - z.x * dir.z, z.x * dir.y - z.y * dir.x};
+			q.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+			q.space = g.space;
+			q.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+			q.subImage.swapchain = b.sw.handle;
+			q.subImage.imageRect.offset = {0, 0};
+			q.subImage.imageRect.extent = {b.sw.width, b.sw.height};
+			q.pose.orientation = quatFromBasis(dir, y, z);
+			q.pose.position = {mid.x, mid.y, mid.z};
+			q.size = {sx, sy};
+			return true;
+		};
+		if (place(beamQuad[h], {a.position.x + dir.x * len * 0.5f, a.position.y + dir.y * len * 0.5f, a.position.z + dir.z * len * 0.5f}, len, 0.006f))
+			layers[nl++] = (const XrCompositionLayerBaseHeader *)&beamQuad[h];
+		if (place(dotQuad[h], {a.position.x + dir.x * len, a.position.y + dir.y * len, a.position.z + dir.z * len}, 0.03f, 0.03f))
+			layers[nl++] = (const XrCompositionLayerBaseHeader *)&dotQuad[h];
 	}
 
 	// Laser pointer: a thin quad from the pointing hand to the screen, drawn after (in front of) it.

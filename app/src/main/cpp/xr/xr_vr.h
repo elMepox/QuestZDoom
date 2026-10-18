@@ -101,6 +101,10 @@ void xr_hud_set_wrist(int on, float width);
 // readable like a wristwatch; otherwise it floats above the controller facing the head.
 void xr_hud_set_panel(int on, float width, float stripFrac, int watch, float back, float lift);
 
+// Aim laser of a hand for the next few frames: a solid beam along the controller's aim, lengthMeters long, with a dot at
+// the end. rgb = 0xRRGGBB. Call every game tic while the laser is on; it disappears by itself when the calls stop.
+void xr_laser_set(int hand, float lengthMeters, unsigned rgb);
+
 // ---- app switching ----
 // Leaves the game and shows the 2D mod library panel (implemented through DoomXRActivity.returnToLibrary).
 void xr_open_library(void);

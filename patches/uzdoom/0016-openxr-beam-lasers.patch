@@ -1,0 +1,61 @@
+diff --git a/src/playsim/p_pspr.cpp b/src/playsim/p_pspr.cpp
+index 26e124d07..ea67f4372 100644
+--- a/src/playsim/p_pspr.cpp
++++ b/src/playsim/p_pspr.cpp
+@@ -189,44 +189,31 @@ void XrLogShot(const char *what, AActor *m, DAngle angle, DAngle pitch)
+ 	                    deltaangle(m->Angles.Yaw, angle).Degrees(), (pitch - m->Angles.Pitch).Degrees(), m->X(), m->Y(), m->Z());
+ }
+ 
+-CVAR(Bool, vr_aim_laser, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// debug: mark with small lights where the shots of the right hand go
++CVAR(Bool, vr_aim_laser, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// debug: mark with small lights where the shots go
+ 
+-// A dotted line from each hand to the point a hitscan from the same pose would hit, drawn as short-lived world sprites:
+-// yellow for the right hand, blue for the left one (while dual wield is on and the left weapon is out). Each line is
+-// built inside the same XrAimScope as a shot of that hand, so it uses exactly the position and angles the weapon
++// A solid beam from each hand to the point a hitscan from the same pose would hit, drawn by the OpenXR side as a thin quad:
++// yellow for the right hand, blue for the left one (while dual wield is on and the left weapon is out). The length is
++// traced inside the same XrAimScope as a shot of that hand, so it uses exactly the position and angles the weapon
+ // functions see.
+ static void XrAimLaserHand(player_t *p, int hand)
+ {
+ 	XrAimScope aim(p, hand);
+ 	AActor *m = aim.mo;
+ 	if (m == nullptr) return;
+-	static PClassActor *dot = PClass::FindActor("Candlestick");
+-	if (dot == nullptr) return;
+ 
+ 	const double range = 4096;
+ 	const double sz = m->Height * 0.5 + m->AttackOffset();	// Center() - Floorclip + AttackOffset() as in P_LineAttack
+ 	FLineTraceData tr;
+ 	const bool hit = P_LineTrace(m, m->Angles.Yaw, range, m->Angles.Pitch, 0, sz, 0, 0, &tr) != 0;
+ 	const double len = hit ? tr.Distance : range;
+-	const double pc = m->Angles.Pitch.Cos();
+-	const DVector3 dir(pc * m->Angles.Yaw.Cos(), pc * m->Angles.Yaw.Sin(), -m->Angles.Pitch.Sin());
+-	const DVector3 start = m->PosAtZ(m->Z() - m->Floorclip + sz);
+-
+-	auto put = [&](double dist, double scale)
+-	{
+-		AActor *d = Spawn(m->Level, dot, start + dir * dist, NO_REPLACE);
+-		if (d == nullptr) return;
+-		d->flags |= MF_NOGRAVITY;
+-		d->Scale = DVector2(scale, scale);
+-		d->tics = 2;	// gone after two tics: the next tic draws the line again
+-		if (hand == 0)
+-		{
+-			d->RenderStyle = STYLE_Shaded;
+-			d->SetShade(0x40A0FF);
+-		}
+-	};
+-	for (int i = 1; i <= 10; i++) put(len * i / 11, 0.2);
+-	put(len, 0.6);
++
++	// The OpenXR side draws the beam from the controller along its aim; it needs the length in meters. Map units per
++	// meter are vr_hunits_per_meter / stretch horizontally (see xr_get_hand), and the vertical part is stretched.
++	const double stretch = m->Level->info->pixelstretch;
++	const double upm = vr_hunits_per_meter / stretch;
++	const double pc = m->Angles.Pitch.Cos(), sn = m->Angles.Pitch.Sin();
++	const double meters = len / upm * sqrt(pc * pc + sn * sn * stretch * stretch);
++	xr_laser_set(hand, (float)meters, hand == 0 ? 0x40A0FF : 0xFFD83A);
+ }
+ 
+ void XrAimLaser(player_t *p)
