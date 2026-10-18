@@ -97,7 +97,9 @@ void xr_hud_set_wrist(int on, float width);
 
 // Interactive panel mode: the bottom stripFrac of the HUD image goes to a small panel (width in meters) above the left
 // controller that can be touched with the right fingertip (DoomXrInput.hud*). Set before xr_hud_blit each frame.
-void xr_hud_set_panel(int on, float width, float stripFrac);
+// watch != 0: the panel lies on the back of the left forearm, back metres behind the controller and lift off the wrist,
+// readable like a wristwatch; otherwise it floats above the controller facing the head.
+void xr_hud_set_panel(int on, float width, float stripFrac, int watch, float back, float lift);
 
 // ---- app switching ----
 // Leaves the game and shows the 2D mod library panel (implemented through DoomXRActivity.returnToLibrary).

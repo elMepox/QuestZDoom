@@ -86,6 +86,8 @@ struct State
 	bool panelOn = false, panelDrawn = false, panelShown = false;
 	float panelW = 0.3f, panelFrac = 0.25f;	// panelFrac: height of the panel's corner of the screen image, as a fraction of its height
 	bool panelHover = false;
+	bool panelWatch = true;
+	float panelBack = 0.11f, panelLift = 0.05f;	// watch mode: metres from the controller towards the elbow, and off the back of the wrist
 	bool laserHit = false;
 	float laserLen = 0;
 
@@ -397,16 +399,36 @@ bool hitScreen(const XrPosef &aim, float *u, float *v, float *dist)
 	return true;
 }
 
-// Pose of the interactive HUD panel: upright, a hand's width above the left controller, turned towards the head.
+// Pose of the interactive HUD panel. Watch mode: lying on the back of the left forearm, a little behind the controller,
+// read like a wristwatch (text runs along the arm towards the fingers; hidden while it faces away from the eyes).
+// Otherwise: upright, a hand's width above the left controller, turned towards the head.
 bool computePanelPose(float w, XrPosef *out)
 {
 	if (!g.aimValid[0]) return false;
+	(void)w;
 	const XrPosef &a = g.aim[0];
-	const Vec3 up = rotate(a.orientation, {0, 1, 0});
-	const Vec3 c = {a.position.x + up.x * 0.12f, a.position.y + up.y * 0.12f, a.position.z + up.z * 0.12f};
 	const Vec3 head = {0.5f * (g.views[0].pose.position.x + g.views[1].pose.position.x),
 	                   0.5f * (g.views[0].pose.position.y + g.views[1].pose.position.y),
 	                   0.5f * (g.views[0].pose.position.z + g.views[1].pose.position.z)};
+	if (g.panelWatch)
+	{
+		// Left controller axes: x right (towards the palm side), y up (thumb), z back (towards the elbow). The back of the
+		// hand faces -x; the panel's right is -z (towards the fingers), its up -y (pinky side), its normal -x.
+		const Vec3 cx = rotate(a.orientation, {1, 0, 0}), cy = rotate(a.orientation, {0, 1, 0}), cz = rotate(a.orientation, {0, 0, 1});
+		const Vec3 px = {-cz.x, -cz.y, -cz.z}, py = {-cy.x, -cy.y, -cy.z}, pz = {-cx.x, -cx.y, -cx.z};
+		const Vec3 c = {a.position.x + cz.x * g.panelBack + pz.x * g.panelLift,
+		                a.position.y + cz.y * g.panelBack + pz.y * g.panelLift,
+		                a.position.z + cz.z * g.panelBack + pz.z * g.panelLift};
+		const Vec3 toHead = {head.x - c.x, head.y - c.y, head.z - c.z};
+		const float tl = sqrtf(toHead.x * toHead.x + toHead.y * toHead.y + toHead.z * toHead.z);
+		if (tl < 1e-3f) return false;
+		if ((toHead.x * pz.x + toHead.y * pz.y + toHead.z * pz.z) / tl < 0.2f) return false;	// turned away from the eyes
+		out->orientation = quatFromBasis(px, py, pz);
+		out->position = {c.x, c.y, c.z};
+		return true;
+	}
+	const Vec3 up = rotate(a.orientation, {0, 1, 0});
+	const Vec3 c = {a.position.x + up.x * 0.12f, a.position.y + up.y * 0.12f, a.position.z + up.z * 0.12f};
 	Vec3 z = {head.x - c.x, head.y - c.y, head.z - c.z};
 	const float zl = sqrtf(z.x * z.x + z.y * z.y + z.z * z.z);
 	if (zl < 1e-3f) return false;
@@ -418,7 +440,6 @@ bool computePanelPose(float w, XrPosef *out)
 	const Vec3 y = {z.y * x.z - z.z * x.y, z.z * x.x - z.x * x.z, z.x * x.y - z.y * x.x};	// cross(z, x)
 	out->orientation = quatFromBasis(x, y, z);
 	out->position = {c.x, c.y, c.z};
-	(void)w;
 	return true;
 }
 
@@ -824,8 +845,11 @@ void xr_hud_set_wrist(int on, float width)
 	g.hudWristW = width < 0.05f ? 0.05f : (width > 1.5f ? 1.5f : width);
 }
 
-void xr_hud_set_panel(int on, float width, float stripFrac)
+void xr_hud_set_panel(int on, float width, float stripFrac, int watch, float back, float lift)
 {
+	g.panelWatch = watch != 0;
+	g.panelBack = back < -0.2f ? -0.2f : (back > 0.4f ? 0.4f : back);
+	g.panelLift = lift < -0.1f ? -0.1f : (lift > 0.3f ? 0.3f : lift);
 	g.panelOn = on != 0;
 	g.panelW = width < 0.1f ? 0.1f : (width > 0.8f ? 0.8f : width);
 	g.panelFrac = stripFrac < 0.1f ? 0.1f : (stripFrac > 0.5f ? 0.5f : stripFrac);
