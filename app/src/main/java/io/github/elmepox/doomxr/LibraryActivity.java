@@ -23,7 +23,7 @@ import io.github.elmepox.doomxr.mods.Catalog;
 import io.github.elmepox.doomxr.mods.CatalogEntry;
 import io.github.elmepox.doomxr.mods.Downloader;
 import io.github.elmepox.doomxr.mods.HttpFetcher;
-import io.github.elmepox.doomxr.mods.IdgamesClient;
+import io.github.elmepox.doomxr.mods.IdgamesIndex;
 import io.github.elmepox.doomxr.mods.LaunchProfile;
 import io.github.elmepox.doomxr.mods.ModLibrary;
 
@@ -61,6 +61,7 @@ public class LibraryActivity extends Activity {
     private Spinner iwadSpinner;
     private final List<CheckBox> modBoxes = new ArrayList<>();
     private Catalog catalog;
+    private volatile IdgamesIndex index;
     private boolean onLibrary;
 
     @Override
@@ -201,19 +202,41 @@ public class LibraryActivity extends Activity {
         finishAndRemoveTask();
     }
 
+    /** Search over the idgames archive listing from the mirrors (downloaded once a day, then local). */
     private void searchIdgames(String query, LinearLayout results) {
         results.removeAllViews();
         runBg("Ищу «" + query + "»", () -> {
-            List<IdgamesClient.Result> hits = new IdgamesClient(http).search(query, IdgamesClient.SearchType.TITLE);
+            if (index == null) {
+                index = IdgamesIndex.load(http, IdgamesIndex.DEFAULT_MIRRORS,
+                        new File(getCacheDir(), "ls-laR.gz"), IdgamesIndex.MAX_AGE_MS);
+            }
+            List<IdgamesIndex.Entry> hits = index.search(query, 40);
             ui.post(() -> {
                 if (hits.isEmpty()) results.addView(label("Ничего не найдено."));
-                for (IdgamesClient.Result r : hits) {
-                    results.addView(button(r.title + " · " + r.author + " · " + r.rating + " — скачать", v ->
-                            runBg("Скачиваю " + r.filename, () -> new Downloader(http).fetch(
-                                    IdgamesClient.downloadUrls(r, IdgamesClient.DEFAULT_MIRRORS),
-                                    r.filename, "", r.size, modsDir, null))));
+                for (IdgamesIndex.Entry e : hits) {
+                    String info = e.title() + " · " + e.dir + " · " + (e.size / 1024) + " КБ";
+                    results.addView(button(info + " — скачать", v -> runBg("Скачиваю " + e.filename, () ->
+                            new Downloader(http).fetch(e.downloadUrls(IdgamesIndex.DEFAULT_MIRRORS),
+                                    e.filename, "", e.size, modsDir, null))));
+                    results.addView(button("Описание: " + e.title(), v -> showDescription(e)));
                 }
             });
+        });
+    }
+
+    private void showDescription(IdgamesIndex.Entry e) {
+        runBg("Загружаю описание", () -> {
+            String text = "Описание не найдено.";
+            for (String url : e.textUrls(IdgamesIndex.DEFAULT_MIRRORS)) {
+                try (InputStream in = http.open(url)) {
+                    byte[] b = in.readNBytes(8000);
+                    text = new String(b, StandardCharsets.ISO_8859_1);
+                    break;
+                } catch (IOException ignored) { }
+            }
+            final String t = text;
+            ui.post(() -> new android.app.AlertDialog.Builder(this).setTitle(e.title()).setMessage(t)
+                    .setPositiveButton("Закрыть", null).show());
         });
     }
 

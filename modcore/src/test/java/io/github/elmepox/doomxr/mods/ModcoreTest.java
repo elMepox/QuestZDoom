@@ -48,19 +48,57 @@ class ModcoreTest {
         assertThrows(Exception.class, () -> Catalog.parse("{\"schema\":2,\"entries\":[]}"));
     }
 
+    private static final String LISTING =
+            ".:\ntotal 4\n-rw-r--r--   1 ftp ftp  1234 Jan  1  2000 README.txt\n\n"
+            + "./levels/doom2/megawads:\ntotal 9\n"
+            + "-rw-r--r--   1 ftp ftp  7531818 Mar 12  2003 scythe.zip\n"
+            + "-rw-r--r--   1 ftp ftp     5000 Mar 12  2003 scythe.txt\n"
+            + "-rw-r--r--   1 ftp ftp 90000000 Oct 17 21:33 eviternity.zip\n"
+            + "drwxr-xr-x   2 ftp ftp     4096 Mar 12  2003 sub\n\n"
+            + "./levels/doom/a-c:\n"
+            + "-rw-r--r--+  1 ftp ftp     1111 Mar 12  2003 scythe_old.zip\n"
+            + "-rw-r--r--   1 ftp ftp     2222 Mar 12  2003 other.ZIP\n";
+
+    private static IdgamesIndex index() throws Exception {
+        return IdgamesIndex.parse(new ByteArrayInputStream(LISTING.getBytes(StandardCharsets.ISO_8859_1)));
+    }
+
     @Test
-    void idgamesParsesOneAndManyHitsAndErrors() throws Exception {
-        String many = "{\"content\":{\"file\":[{\"id\":1,\"title\":\"A\",\"dir\":\"levels/doom2/a-c/\",\"filename\":\"a.zip\"},"
-                + "{\"id\":2,\"title\":\"B\",\"dir\":\"levels/doom2/a-c/\",\"filename\":\"b.zip\"}]}}";
-        assertEquals(2, IdgamesClient.parseSearch(many).size());
-        String one = "{\"content\":{\"file\":{\"id\":1,\"title\":\"A\",\"dir\":\"x/\",\"filename\":\"a.zip\"}}}";
-        List<IdgamesClient.Result> r = IdgamesClient.parseSearch(one);
-        assertEquals(1, r.size());
-        assertEquals(List.of("https://m1/pub/x/a.zip", "https://m2/x/a.zip"),
-                IdgamesClient.downloadUrls(r.get(0), List.of("https://m1/pub", "https://m2/")));
-        assertThrows(IdgamesClient.ApiException.class,
-                () -> IdgamesClient.parseSearch("{\"error\":{\"type\":\"Query Too Small\",\"message\":\"too small\"}}"));
-        assertThrows(IdgamesClient.ApiException.class, () -> new IdgamesClient(fake(Map.of())).search("ab", IdgamesClient.SearchType.TITLE));
+    void idgamesIndexParsesSearchesAndBuildsUrls() throws Exception {
+        IdgamesIndex idx = index();
+        assertEquals(4, idx.size()); // zips only, case-insensitive extension
+        List<IdgamesIndex.Entry> hits = idx.search("scythe", 10);
+        assertEquals(List.of("scythe.zip", "scythe_old.zip"), List.of(hits.get(0).filename, hits.get(1).filename));
+        assertEquals("doom2", hits.get(0).iwad());
+        assertEquals("doom", hits.get(1).iwad());
+        assertEquals(7531818L, hits.get(0).size);
+        assertEquals(1, idx.search("megawads evit", 10).size()); // words may match folder and name
+        assertEquals(0, idx.search("", 10).size());
+        assertEquals(List.of("https://m1/pub/levels/doom2/megawads/scythe.zip", "https://m2/levels/doom2/megawads/scythe.zip"),
+                hits.get(0).downloadUrls(List.of("https://m1/pub", "https://m2/")));
+        assertEquals("https://m1/levels/doom2/megawads/scythe.txt", hits.get(0).textUrls(List.of("https://m1/")).get(0));
+    }
+
+    @Test
+    void idgamesIndexCachesAndFallsBackToStaleCache(@TempDir File dir) throws Exception {
+        ByteArrayOutputStream gz = new ByteArrayOutputStream();
+        try (java.util.zip.GZIPOutputStream z = new java.util.zip.GZIPOutputStream(gz)) {
+            z.write(LISTING.getBytes(StandardCharsets.ISO_8859_1));
+        }
+        File cache = new File(dir, "ls.gz");
+        // first mirror dead, second serves the listing
+        IdgamesIndex a = IdgamesIndex.load(fake(Map.of("https://b/ls-laR.gz", gz.toByteArray())),
+                List.of("https://a/", "https://b/"), cache, IdgamesIndex.MAX_AGE_MS);
+        assertEquals(4, a.size());
+        // fresh cache: no network needed
+        assertEquals(4, IdgamesIndex.load(fake(Map.of()), List.of("https://a/"), cache, IdgamesIndex.MAX_AGE_MS).size());
+        // stale cache and every mirror down: keep using the cache
+        assertEquals(4, IdgamesIndex.load(fake(Map.of()), List.of("https://a/"), cache, -1).size());
+        // garbage from a mirror must not replace the cache
+        File cache2 = new File(dir, "ls2.gz");
+        assertThrows(IOException.class, () -> IdgamesIndex.load(fake(Map.of("https://a/ls-laR.gz", new byte[] {1, 2, 3})),
+                List.of("https://a/"), cache2, IdgamesIndex.MAX_AGE_MS));
+        assertFalse(cache2.exists());
     }
 
     @Test
