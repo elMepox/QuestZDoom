@@ -1,0 +1,180 @@
+diff --git a/src/rendering/hwrenderer/hw_models.cpp b/src/rendering/hwrenderer/hw_models.cpp
+index 9de1b64863..a4548c78f2 100644
+--- a/src/rendering/hwrenderer/hw_models.cpp
++++ b/src/rendering/hwrenderer/hw_models.cpp
+@@ -37,6 +37,9 @@ CVAR(Bool, gl_light_models, true, CVAR_ARCHIVE)
+ 
+ VSMatrix FHWModelRenderer::GetViewToWorldMatrix()
+ {
++#ifdef DOOMXR_OPENXR
++	if (di->xrHudModelToWorld) return *di->xrHudModelToWorld;	// hand-held model: the controller's frame instead of the eye's
++#endif
+ 	VSMatrix objectToWorldMatrix;
+ 	di->VPUniforms.mViewMatrix.inverseMatrix(objectToWorldMatrix);
+ 	return objectToWorldMatrix;
+diff --git a/src/rendering/hwrenderer/scene/hw_drawinfo.h b/src/rendering/hwrenderer/scene/hw_drawinfo.h
+index 13c41b70f3..59944e9ce7 100644
+--- a/src/rendering/hwrenderer/scene/hw_drawinfo.h
++++ b/src/rendering/hwrenderer/scene/hw_drawinfo.h
+@@ -181,6 +181,8 @@ struct HWDrawInfo
+ 	bool xrHandLValid = false;
+ 	void DrawXrPlayerSprites(FRenderState &state);
+ 	void DrawXrHandSprites(FRenderState &state, const DoomXrHand &hand, bool left);
++	void DrawXrHandModels(FRenderState &state, const DoomXrHand &hand, bool left);
++	const VSMatrix *xrHudModelToWorld = nullptr;	// hand frame for RenderHUDModel(), set while a hand-held model is drawn
+ #endif
+ 	//TArray<ACorona*> Coronas;
+ 	uint64_t LastFrameTime = 0;
+diff --git a/src/rendering/hwrenderer/scene/hw_weapon.cpp b/src/rendering/hwrenderer/scene/hw_weapon.cpp
+index 6051a02e5a..4eb7fad809 100644
+--- a/src/rendering/hwrenderer/scene/hw_weapon.cpp
++++ b/src/rendering/hwrenderer/scene/hw_weapon.cpp
+@@ -36,6 +36,7 @@
+ #include "hwrenderer/scene/hw_drawstructs.h"
+ #include "flatvertices.h"
+ #include "hw_lightbuffer.h"
++#include "hw_bonebuffer.h"
+ #include "hw_renderstate.h"
+ #include "hw_viewpointbuffer.h"
+ 
+@@ -130,6 +131,8 @@ EXTERN_CVAR(Float, vr_hunits_per_meter)
+ EXTERN_CVAR(Float, vr_weapon_scale)
+ EXTERN_CVAR(Float, vr_weapon_tilt)
+ CVAR(Bool, vr_weapon_roll, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// the weapon sprite follows the wrist roll (off: stays upright so it points where the shots go)
++CVAR(Float, vr_weapon_model_scale, 1.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// size of a hand-held 3D weapon model (1 model unit = 1 meter at 1.0)
++CVAR(Float, vr_weapon_model_pitch, 0.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// tips a hand-held 3D weapon model up (+) or down (-) from the controller's aim, degrees
+ 
+ //==========================================================================
+ //
+@@ -145,6 +148,8 @@ void HWDrawInfo::DrawXrPlayerSprites(FRenderState &state)
+ {
+ 	if (xrHandValid) DrawXrHandSprites(state, xrHand, false);
+ 	if (xrHandLValid) DrawXrHandSprites(state, xrHandL, true);
++	if (xrHandValid) DrawXrHandModels(state, xrHand, false);
++	if (xrHandLValid) DrawXrHandModels(state, xrHandL, true);
+ }
+ 
+ // The weapon layers of the left hand (dual wield) are PSP_LEFT and PSP_LEFTFLASH; everything else is the right hand's.
+@@ -153,6 +158,23 @@ static bool XrIsLeftLayer(const HUDSprite &h)
+ 	return h.weapon->GetID() == PSP_LEFT || h.weapon->GetID() == PSP_LEFTFLASH;
+ }
+ 
++// Wrist roll would swing a weapon's barrel sideways while the shots keep going along the aim direction: unless
++// vr_weapon_roll is on, use a frame without roll (right stays horizontal), so the barrel always lines up with the aim yaw.
++static void XrLevelHandFrame(DoomXrHand &H)
++{
++	if (vr_weapon_roll) return;
++	double rx = H.fy, ry = -H.fx;
++	const double rl = sqrt(rx * rx + ry * ry);
++	if (rl > 0.2)	// not aiming (nearly) straight up or down
++	{
++		rx /= rl; ry /= rl;
++		H.rx = rx; H.ry = ry; H.rz = 0;
++		H.ux = ry * H.fz;
++		H.uy = -rx * H.fz;
++		H.uz = rx * H.fy - ry * H.fx;
++	}
++}
++
+ void HWDrawInfo::DrawXrHandSprites(FRenderState &state, const DoomXrHand &hand, bool left)
+ {
+ 	bool any = false;
+@@ -166,21 +188,7 @@ void HWDrawInfo::DrawXrHandSprites(FRenderState &state, const DoomXrHand &hand,
+ 	const double tilt = DAngle::fromDeg(vr_weapon_tilt).Radians();
+ 	const double ct = cos(tilt), st = sin(tilt);
+ 	DoomXrHand H = hand;
+-	if (!vr_weapon_roll)
+-	{
+-		// Wrist roll would swing the sprite's barrel sideways while the shots keep going along the aim direction: use
+-		// a frame without roll (image-right stays horizontal), so the barrel always lines up with the aim yaw.
+-		double rx = H.fy, ry = -H.fx;
+-		const double rl = sqrt(rx * rx + ry * ry);
+-		if (rl > 0.2)	// not aiming (nearly) straight up or down
+-		{
+-			rx /= rl; ry /= rl;
+-			H.rx = rx; H.ry = ry; H.rz = 0;
+-			H.ux = ry * H.fz;
+-			H.uy = -rx * H.fz;
+-			H.uz = rx * H.fy - ry * H.fx;
+-		}
+-	}
++	XrLevelHandFrame(H);
+ 	// Image up: the hand's up tipped towards its aim direction.
+ 	double iux = H.ux * ct + H.fx * st, iuy = H.uy * ct + H.fy * st, iuz = H.uz * ct + H.fz * st;
+ 	const double il = sqrt(iux * iux + iuy * iuy + iuz * iuz);
+@@ -223,6 +231,75 @@ void HWDrawInfo::DrawXrHandSprites(FRenderState &state, const DoomXrHand &hand,
+ 	}
+ 	lightmode = oldlightmode;
+ }
++
++//==========================================================================
++//
++// OpenXR: a weapon with a MODELDEF entry is drawn as a 3D model held by the controller.
++//
++// RenderHUDModel() places a model relative to the eye (+x right, +y up, -z forward, model x pointing forward);
++// here that frame is replaced by the hand's: origin on the controller, forward along its aim direction (tipped by
++// vr_weapon_model_pitch), up from the controller (roll-free unless vr_weapon_roll). One model unit is one meter
++// times vr_weapon_model_scale; MODELDEF Scale/Offset apply on top. The model is drawn with the eye's real view
++// and projection over a cleared depth buffer, so it is lit by the level and hidden behind nothing.
++//
++//==========================================================================
++
++void HWDrawInfo::DrawXrHandModels(FRenderState &state, const DoomXrHand &hand, bool left)
++{
++	bool any = false;
++	for (auto &h : hudsprites)
++		if (h.mframe && h.weapon && h.weapon->GetID() < PSP_TARGETCENTER && XrIsLeftLayer(h) == left) { any = true; break; }
++	if (!any) return;
++
++	const double stretch = Level->info->pixelstretch;
++	const double sh = vr_hunits_per_meter / stretch;	// map units per meter, horizontal (as for the head position)
++	const double sv = sh / stretch;						// ... and vertical
++	const double k = vr_weapon_model_scale;
++	DoomXrHand H = hand;
++	XrLevelHandFrame(H);
++	// Aim direction tipped up by the pitch offset; image up follows.
++	const double pitch = DAngle::fromDeg(vr_weapon_model_pitch).Radians();
++	const double cp = cos(pitch), sp = sin(pitch);
++	const double fx = H.fx * cp + H.ux * sp, fy = H.fy * cp + H.uy * sp, fz = H.fz * cp + H.uz * sp;
++	const double ux = H.ux * cp - H.fx * sp, uy = H.uy * cp - H.fy * sp, uz = H.uz * cp - H.fz * sp;
++
++	// Map-space directions -> render space (x, z, y), including the unit conversion. The model's +z is back.
++	auto cu = [&](double x, double y, double z, double *o) { o[0] = x * sh * k; o[1] = z * sv * k; o[2] = y * sh * k; };
++	double r[3], u[3], b[3];
++	cu(H.rx, H.ry, H.rz, r);
++	cu(ux, uy, uz, u);
++	cu(-fx, -fy, -fz, b);
++	float m[16] = {
++		(float)r[0], (float)r[1], (float)r[2], 0.f,
++		(float)u[0], (float)u[1], (float)u[2], 0.f,
++		(float)b[0], (float)b[1], (float)b[2], 0.f,
++		(float)H.x, (float)H.z, (float)H.y, 1.f };
++	VSMatrix handToWorld;
++	handToWorld.loadMatrix(m);
++
++	screen->mViewpoints->SetViewpoint(state, &VPUniforms);	// the eye's view and projection
++	state.Clear(CT_Depth);
++	state.EnableDepthTest(true);
++	state.SetDepthMask(true);
++	state.EnableMultisampling(false);
++	state.EnableFog(false);
++
++	auto oldlightmode = lightmode;
++	if (isSoftwareLighting(oldlightmode)) SetFallbackLightMode();
++	xrHudModelToWorld = &handToWorld;
++	screen->mBones->Map();
++	for (auto &hudsprite : hudsprites)
++	{
++		if (!hudsprite.mframe || !hudsprite.weapon || hudsprite.weapon->GetID() >= PSP_TARGETCENTER) continue;
++		if (XrIsLeftLayer(hudsprite) != left) continue;
++		DrawPSprite(&hudsprite, state);
++	}
++	screen->mBones->Unmap();
++	xrHudModelToWorld = nullptr;
++	lightmode = oldlightmode;
++	state.EnableDepthTest(false);
++	state.SetDepthMask(false);
++}
+ #endif
+ 
+ //==========================================================================
