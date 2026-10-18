@@ -10,6 +10,21 @@ endif()
 
 set(_uz "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# --- 0. compiler cache -----------------------------------------------------------------------
+# Use ccache when it is installed so that a rebuild after a CMake re-configure or `clean` does not
+# recompile the whole engine. Opt out with -DDOOMXR_NO_CCACHE=ON.
+if(NOT DOOMXR_NO_CCACHE)
+  find_program(DOOMXR_CCACHE ccache)
+  if(DOOMXR_CCACHE)
+    message(STATUS "Using ccache: ${DOOMXR_CCACHE}")
+    set(CMAKE_C_COMPILER_LAUNCHER "${DOOMXR_CCACHE}")
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${DOOMXR_CCACHE}")
+    # ccache cannot reuse results for translation units that use a precompiled header ("Could not use
+    # precompiled header"), which is nearly all of the engine. Compile the headers normally instead.
+    set(CMAKE_DISABLE_PRECOMPILE_HEADERS ON)
+  endif()
+endif()
+
 # --- 1. SDL2 ---------------------------------------------------------------------------------
 set(SDL_SHARED ON CACHE BOOL "" FORCE)
 set(SDL_STATIC OFF CACHE BOOL "" FORCE)
@@ -28,13 +43,30 @@ set(SDL2_INCLUDE_DIR "${CMAKE_BINARY_DIR}/sdl2-include" CACHE PATH "" FORCE)
 set(SDL2_LIBRARY_TEMP SDL2 CACHE STRING "" FORCE)   # link by target name
 
 # --- 2. host tools -----------------------------------------------------------------------------
+# The host tools do not depend on the Android build, so keep them outside the CMake build dir (which
+# Gradle recreates on every re-configure) in a directory keyed by everything they are built from.
 set(_host_bin "${CMAKE_BINARY_DIR}/host-tools")
+if(DOOMXR_HOST_TOOLS_CACHE)
+  execute_process(COMMAND git -C "${_uz}" rev-parse HEAD OUTPUT_VARIABLE _uz_head
+                  OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  file(GLOB _patches "${DOOMXR_PATCH_DIR}/*.patch")
+  set(_key "${_uz_head}")
+  foreach(_f ${_patches} "${DOOMXR_HOST_TOOLS_SRC}/CMakeLists.txt")
+    file(SHA256 "${_f}" _h)
+    string(APPEND _key "${_h}")
+  endforeach()
+  string(SHA256 _key "${_key}")
+  string(SUBSTRING "${_key}" 0 16 _key)
+  set(_host_bin "${DOOMXR_HOST_TOOLS_CACHE}/${_key}")
+endif()
 if(NOT EXISTS "${_host_bin}/ImportExecutables.cmake")
   message(STATUS "Building host tools (re2c, lemon, zipdir)")
   execute_process(
     COMMAND ${CMAKE_COMMAND} -S "${DOOMXR_HOST_TOOLS_SRC}" -B "${_host_bin}" -G "Unix Makefiles"
             -DUZDOOM_DIR=${_uz} -DCMAKE_BUILD_TYPE=Release
             -DCMAKE_C_COMPILER=cc -DCMAKE_CXX_COMPILER=c++
+            -DCMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER}
+            -DCMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER}
     RESULT_VARIABLE _rc)
   if(NOT _rc EQUAL 0)
     message(FATAL_ERROR "configuring host tools failed (${_rc})")

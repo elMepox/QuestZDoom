@@ -23,6 +23,14 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: android-${{ runner.os }}
+          max-size: 1G
+
       - name: Install SDK components
         run: |
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$(ls -d $ANDROID_HOME/cmdline-tools/*/bin | head -1):$PATH"
@@ -37,7 +45,7 @@ jobs:
       - name: Build debug APK
         run: |
           set +e
-          ./gradlew --no-daemon assembleDebug 2>&1 | tee build.log
+          ./gradlew assembleDebug --build-cache 2>&1 | tee build.log
           rc=${PIPESTATUS[0]}
           if [ $rc -ne 0 ]; then
             echo "=== FAILURE SUMMARY ==="

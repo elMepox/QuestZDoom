@@ -36,6 +36,9 @@ android {
                     "-DDOOMXR_OPENAL_DIR=${openalDir.asFile.absolutePath}",
                     "-DDOOMXR_ASSET_DIR=${generatedAssets.get().asFile.absolutePath}",
                     "-DDOOMXR_HOST_TOOLS_SRC=${file("src/main/cpp/host-tools").absolutePath}",
+                    // Host tools survive a CMake re-configure (see uzdoom_hook.cmake).
+                    "-DDOOMXR_HOST_TOOLS_CACHE=${layout.buildDirectory.dir("doomxr-host-tools").get().asFile.absolutePath}",
+                    "-DDOOMXR_PATCH_DIR=${rootProject.layout.projectDirectory.dir("patches/uzdoom").asFile.absolutePath}",
                     "-DCMAKE_PROJECT_UZDoom_INCLUDE=${file("src/main/cpp/uzdoom_hook.cmake").absolutePath}",
                     // UZDoom options
                     "-DZDOOM_EXE_NAME:STRING=main",
@@ -50,6 +53,11 @@ android {
                     "-DDYN_SNDFILE=ON",
                     "-DDYN_MPG123=ON",
                 )
+                // -PdoomxrCmakeProfile=<file> writes a Chrome-trace profile of the CMake configure step
+                // (open in chrome://tracing or ui.perfetto.dev) to see where the configure time goes.
+                (project.findProperty("doomxrCmakeProfile") as String?)?.let {
+                    arguments += listOf("--profiling-format=google-trace", "--profiling-output=$it")
+                }
             }
         }
     }
