@@ -1,8 +1,8 @@
 diff --git a/wadsrc/static/menudef.txt b/wadsrc/static/menudef.txt
-index 60c07e85d..15ca59636 100644
+index 60c07e85d..6b456ce96 100644
 --- a/wadsrc/static/menudef.txt
 +++ b/wadsrc/static/menudef.txt
-@@ -353,11 +353,48 @@ DefaultOptionMenu
+@@ -353,11 +353,53 @@ DefaultOptionMenu
  	}
  }
  
@@ -23,6 +23,11 @@ index 60c07e85d..15ca59636 100644
 +	Option "Weapon follows wrist roll",		vr_weapon_roll,		OnOff
 +	Slider "Weapon size",					vr_weapon_scale,	0.3, 3.0, 0.1, 1
 +	Slider "Weapon tilt",					vr_weapon_tilt,		0, 90, 5, 0
++	StaticText " "
++	StaticText "3D models", 1
++	Slider "Model size",					vr_weapon_model_scale,	0.5, 2.0, 0.05, 2
++	Slider "Model tilt (up/down)",			vr_weapon_model_pitch,	-45, 45, 5, 0
++	Option "Model follows wrist roll",		vr_weapon_model_roll,	OnOff
 +	StaticText " "
 +	StaticText "HUD", 1
 +	Option "Forearm HUD",					vr_hud_custom,		OnOff
