@@ -47,6 +47,8 @@ if(NOT EXISTS "${_host_bin}/ImportExecutables.cmake")
     COMMAND ${CMAKE_COMMAND} -S "${DOOMXR_HOST_TOOLS_SRC}" -B "${_host_bin}" -G "Unix Makefiles"
             -DUZDOOM_DIR=${_uz} -DCMAKE_BUILD_TYPE=Release
             -DCMAKE_C_COMPILER=cc -DCMAKE_CXX_COMPILER=c++
+            -DCMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER}
+            -DCMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER}
     RESULT_VARIABLE _rc)
   if(NOT _rc EQUAL 0)
     message(FATAL_ERROR "configuring host tools failed (${_rc})")
