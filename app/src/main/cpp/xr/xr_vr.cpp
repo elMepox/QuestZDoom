@@ -618,7 +618,8 @@ int xr_init(void)
 	if (!check(xrGetSystem(g.instance, &si, &g.system), "xrGetSystem")) return 0;
 	XrSystemProperties sp = {XR_TYPE_SYSTEM_PROPERTIES};
 	xrGetSystemProperties(g.instance, g.system, &sp);
-	g.maxLayers = sp.graphicsProperties.maxLayerCount >= 8 ? sp.graphicsProperties.maxLayerCount : 16;
+	// Quest 3 reports 32 but rejects frames above 16 (XR_ERROR_LAYER_LIMIT_EXCEEDED): never go past 16.
+	g.maxLayers = sp.graphicsProperties.maxLayerCount >= 8 && sp.graphicsProperties.maxLayerCount < 16 ? sp.graphicsProperties.maxLayerCount : 16;
 	LOGI("system: %s (max layers %u)", sp.systemName, g.maxLayers);
 
 	uint32_t vc = 0;
