@@ -95,6 +95,7 @@ struct State
 	Swap fade;			// head-locked black quad for the teleport fade
 	struct Tele { bool on = false, valid = false; int hand = 0; float tEnd = 0; unsigned lastFrame = 0; } teleArc;
 	float fadeAlpha = 0;
+	uint32_t maxLayers = 16;	// xrGetSystemProperties: layers the compositor accepts per frame (more makes xrEndFrame fail and the frame go black)
 	unsigned fadeFrame = 0;
 
 	// recentering
@@ -117,7 +118,7 @@ struct State
 const float kRad2Deg = 57.29577951308232f;
 
 struct Vec3 { float x, y, z; };
-constexpr int kArcSegs = 16;
+constexpr int kArcSegs = 12;
 
 Vec3 rotate(const XrQuaternionf &q, Vec3 v)
 {
@@ -617,7 +618,8 @@ int xr_init(void)
 	if (!check(xrGetSystem(g.instance, &si, &g.system), "xrGetSystem")) return 0;
 	XrSystemProperties sp = {XR_TYPE_SYSTEM_PROPERTIES};
 	xrGetSystemProperties(g.instance, g.system, &sp);
-	LOGI("system: %s", sp.systemName);
+	g.maxLayers = sp.graphicsProperties.maxLayerCount >= 8 ? sp.graphicsProperties.maxLayerCount : 16;
+	LOGI("system: %s (max layers %u)", sp.systemName, g.maxLayers);
 
 	uint32_t vc = 0;
 	xrEnumerateViewConfigurationViews(g.instance, g.system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &vc, nullptr);
@@ -1292,7 +1294,10 @@ int xr_frame_end(int uiWanted)
 	// spot), drawn as short quads, with a flat marker where it ends.
 	XrCompositionLayerQuad arcQuad[kArcSegs + 1];
 	for (auto &q : arcQuad) q = {XR_TYPE_COMPOSITION_LAYER_QUAD};
-	if (g.teleArc.on && !showUi && g.shouldRender && g.frameNo - g.teleArc.lastFrame <= 6 && g.aimValid[g.teleArc.hand] &&
+	// Every segment is a compositor layer and the compositor takes a limited number per frame: use what is left after
+	// the other layers, keeping room for the landing marker and the fade.
+	const int segs = (int)g.maxLayers - (int)nl - 2 > kArcSegs ? kArcSegs : (int)g.maxLayers - (int)nl - 2;
+	if (g.teleArc.on && segs >= 3 && !showUi && g.shouldRender && g.frameNo - g.teleArc.lastFrame <= 6 && g.aimValid[g.teleArc.hand] &&
 	    g.tele.handle != XR_NULL_HANDLE && g.teleArc.tEnd > 0.05f)
 	{
 		if (GLuint fbo = acquire(g.tele))
@@ -1318,9 +1323,9 @@ int xr_frame_end(int uiWanted)
 				            a.position.z + d0.z * XR_TELEPORT_SPEED * t};
 			};
 			Vec3 prevP = at(0.f);
-			for (int i = 1; i <= kArcSegs; i++)
+			for (int i = 1; i <= segs; i++)
 			{
-				const Vec3 cur = at(g.teleArc.tEnd * (float)i / (float)kArcSegs);
+				const Vec3 cur = at(g.teleArc.tEnd * (float)i / (float)segs);
 				const Vec3 seg = {cur.x - prevP.x, cur.y - prevP.y, cur.z - prevP.z};
 				const float sl = sqrtf(seg.x * seg.x + seg.y * seg.y + seg.z * seg.z);
 				if (sl > 1e-3f)
@@ -1344,7 +1349,7 @@ int xr_frame_end(int uiWanted)
 						q.subImage.imageRect.extent = {g.tele.width, g.tele.height};
 						q.pose.orientation = quatFromBasis(dir, y, z);
 						q.pose.position = {mid.x, mid.y, mid.z};
-						q.size = {sl * 1.05f, 0.012f};
+						q.size = {sl * 1.05f, 0.016f};
 						layers[nl++] = (const XrCompositionLayerBaseHeader *)&q;
 					}
 				}
@@ -1454,6 +1459,7 @@ int xr_frame_end(int uiWanted)
 		nl = kept;
 	}
 
+	if (nl > g.maxLayers) nl = g.maxLayers;
 	XrFrameEndInfo ei = {XR_TYPE_FRAME_END_INFO};
 	ei.displayTime = g.displayTime;
 	ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;

@@ -1,5 +1,5 @@
 diff --git a/src/common/platform/posix/sdl/i_input.cpp b/src/common/platform/posix/sdl/i_input.cpp
-index 32864b8..e208615 100644
+index 32864b8..79d8307 100644
 --- a/src/common/platform/posix/sdl/i_input.cpp
 +++ b/src/common/platform/posix/sdl/i_input.cpp
 @@ -53,6 +53,8 @@
@@ -11,7 +11,7 @@ index 32864b8..e208615 100644
  #endif
  
  bool GUICapture;
-@@ -244,6 +246,12 @@ static const TMap<SDL_Scancode, uint8_t> KeyScanToDIK(InitKeyScanMap());
+@@ -244,6 +246,13 @@ static const TMap<SDL_Scancode, uint8_t> KeyScanToDIK(InitKeyScanMap());
  EXTERN_CVAR(Bool, vr_dual_wield)
  CVAR(Int, vr_turn_mode, 1, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)				// 0 = smooth, 1 = snap
  CVAR(Float, vr_snap_turn_degrees, 30.f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
@@ -21,18 +21,21 @@ index 32864b8..e208615 100644
 +struct player_t;
 +bool XrTeleportAimUpdate(player_t *p, float *tEnd, double *dest);
 +void XrTeleportGo(player_t *p, const double *dest);
++void XrDash(player_t *p, double right, double forward);
  
  // Read by G_BuildTiccmd (g_game.cpp): analog movement from the thumbsticks, -1..1.
  float g_xrMoveForward, g_xrMoveSide, g_xrSmoothTurn;
-@@ -291,6 +299,56 @@ static void XrHold(XrHeld &h, bool want, const char *plus, const char *minus)
+@@ -291,6 +300,65 @@ static void XrHold(XrHeld &h, bool want, const char *plus, const char *minus)
  	C_DoCommand(want ? plus : minus);
  }
  
-+// Teleport: stick forward starts aiming, release jumps (fade out, move, fade in). An unusable aim just cancels.
++// Teleport mode on the left stick: forward aims the arc and release jumps (fade out, move, fade in; an unusable aim just
++// cancels); left/right is a quick sideways dash to dodge, back a dash backwards to run away; held, a dash repeats.
 +static int tpState = 0;				// 0 idle, 1 aiming, 2 fading out, 3 fading in
 +static uint64_t tpT0 = 0;
 +static double tpDest[3];
-+static const uint64_t TP_FADE_OUT_MS = 110, TP_FADE_IN_MS = 160;
++static const uint64_t TP_FADE_OUT_MS = 110, TP_FADE_IN_MS = 160, DASH_COOLDOWN_MS = 450;
++static uint64_t dashReady = 0;
 +
 +static void XrTeleportTick(float stickY, float stickX)
 +{
@@ -43,6 +46,13 @@ index 32864b8..e208615 100644
 +	{
 +	case 0:
 +		if (stickY > 0.7f && fabsf(stickX) < 0.7f) tpState = 1;
++		else if (now >= dashReady && (fabsf(stickX) > 0.7f || stickY < -0.7f))
++		{
++			if (fabsf(stickX) > 0.7f) XrDash(pl, stickX > 0 ? 1.0 : -1.0, 0.0);
++			else XrDash(pl, 0.0, -1.0);
++			dashReady = now + DASH_COOLDOWN_MS;
++			xr_haptic(0, 0.3f, 0.03f);
++		}
 +		break;
 +	case 1:
 +	{
@@ -81,7 +91,7 @@ index 32864b8..e208615 100644
  static void XRInputTick()
  {
  	static DoomXrInput prev;
-@@ -314,6 +372,7 @@ static void XRInputTick()
+@@ -314,6 +382,7 @@ static void XRInputTick()
  
  	const bool inLevel = gamestate == GS_LEVEL && !GUICapture && menuactive == MENU_Off && ConsoleState == c_up;
  
@@ -89,7 +99,7 @@ index 32864b8..e208615 100644
  	if (inLevel)
  	{
  		// Head rotation drives the body, like mouse look (this also keeps aim and movement along the gaze).
-@@ -324,6 +383,11 @@ static void XRInputTick()
+@@ -324,6 +393,11 @@ static void XRInputTick()
  
  		g_xrMoveForward = XrDeadzone(in.moveY);
  		g_xrMoveSide = XrDeadzone(in.moveX);
@@ -102,7 +112,7 @@ index 32864b8..e208615 100644
  		{
  			g_xrSmoothTurn = XrDeadzone(in.turnX);
 diff --git a/src/playsim/p_pspr.cpp b/src/playsim/p_pspr.cpp
-index 6359624..dad7475 100644
+index 6359624..952182f 100644
 --- a/src/playsim/p_pspr.cpp
 +++ b/src/playsim/p_pspr.cpp
 @@ -52,6 +52,7 @@
@@ -113,7 +123,7 @@ index 6359624..dad7475 100644
  #include <math.h>
  #include <string.h>
  EXTERN_CVAR(Int, vr_mode)
-@@ -224,6 +225,95 @@ void XrAimLaser(player_t *p)
+@@ -224,6 +225,107 @@ void XrAimLaser(player_t *p)
  	if (p->FindPSprite(PSP_LEFT) != nullptr) XrAimLaserHand(p, 0);
  }
  
@@ -206,6 +216,18 @@ index 6359624..dad7475 100644
 +	}
 +}
 +
++// A quick dash: an impulse along the body's right (right > 0) / forward axis that the normal ground friction then eats, so
++// it reads as a short smooth lunge (about 100 units) and stops at walls like any other movement.
++void XrDash(player_t *p, double right, double forward)
++{
++	AActor *m = p->mo;
++	if (m == nullptr) return;
++	const double v = 9.0;
++	const double c = m->Angles.Yaw.Cos(), s = m->Angles.Yaw.Sin();
++	m->Vel.X += (c * forward + s * right) * v;
++	m->Vel.Y += (s * forward - c * right) * v;
++}
++
  // ---- interactive forearm HUD ----
  // A panel above the left controller: health, armor, ammo of the ready weapon and the weapon slots. The game draws it
  // into the bottom-left corner of the screen image (its aspect is the panel's 512:192, a quarter of the screen high), the
@@ -220,7 +242,7 @@ index 9b55288..eb104a9 100644
 +OptionValue "DoomXRMoveMode"
 +{
 +	0, "Smooth (left stick)"
-+	1, "Teleport (stick forward, aim, release)"
++	1, "Teleport + dashes"
 +}
 +
  OptionValue "DoomXRTurnMode"
