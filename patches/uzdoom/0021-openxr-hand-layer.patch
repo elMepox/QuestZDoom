@@ -59,7 +59,7 @@ diff --git a/src/rendering/hwrenderer/scene/hw_weapon.cpp b/src/rendering/hwrend
  
  	auto oldlightmode = lightmode;
  	if (isSoftwareLighting(oldlightmode)) SetFallbackLightMode();
-@@ -305,8 +322,114 @@
+@@ -305,8 +322,119 @@
  	screen->mBones->Unmap();
  	xrHudModelToWorld = nullptr;
  	lightmode = oldlightmode;
@@ -144,6 +144,10 @@ diff --git a/src/rendering/hwrenderer/scene/hw_weapon.cpp b/src/rendering/hwrend
 +	}
 +
 +	const PalEntry skin = PalEntry(vr_hand_color | 0xff000000);
++	screen->mViewpoints->SetViewpoint(state, &VPUniforms);	// the eye's view and projection
++	state.SetVertexBuffer(screen->mVertexData);	// a weapon model leaves its own vertex buffer bound
++	auto oldlightmode = lightmode;
++	if (isSoftwareLighting(oldlightmode)) SetFallbackLightMode();	// software lighting would darken flat colours by light level
 +	state.EnableDepthTest(true);
 +	state.SetCulling(Cull_None);
 +	state.EnableTexture(false);
@@ -171,6 +175,7 @@ diff --git a/src/rendering/hwrenderer/scene/hw_weapon.cpp b/src/rendering/hwrend
 +	}
 +	state.EnableTexture(true);
 +	state.AlphaFunc(Alpha_GEqual, gl_mask_sprite_threshold);
++	lightmode = oldlightmode;
 +	if (xr_trace())
 +		xr_log("hand %s: %d box(es), %d vertices, trigger %.2f grip %.2f", left ? "left" : "right", nb, total, trigger, grip);
  }
