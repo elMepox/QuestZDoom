@@ -102,10 +102,18 @@ index 32864b8..e208615 100644
  		{
  			g_xrSmoothTurn = XrDeadzone(in.turnX);
 diff --git a/src/playsim/p_pspr.cpp b/src/playsim/p_pspr.cpp
-index 6359624..9ca9f92 100644
+index 6359624..dad7475 100644
 --- a/src/playsim/p_pspr.cpp
 +++ b/src/playsim/p_pspr.cpp
-@@ -224,6 +224,95 @@ void XrAimLaser(player_t *p)
+@@ -52,6 +52,7 @@
+ #include "a_weapons.h"
+ #include <android/log.h>
+ #include "p_linetracedata.h"
++#include "p_checkposition.h"
+ #include <math.h>
+ #include <string.h>
+ EXTERN_CVAR(Int, vr_mode)
+@@ -224,6 +225,95 @@ void XrAimLaser(player_t *p)
  	if (p->FindPSprite(PSP_LEFT) != nullptr) XrAimLaserHand(p, 0);
  }
  
