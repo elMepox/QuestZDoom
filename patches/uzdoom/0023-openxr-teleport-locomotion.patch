@@ -1,5 +1,5 @@
 diff --git a/src/common/platform/posix/sdl/i_input.cpp b/src/common/platform/posix/sdl/i_input.cpp
-index 32864b8..79d8307 100644
+index 32864b8..87557b4 100644
 --- a/src/common/platform/posix/sdl/i_input.cpp
 +++ b/src/common/platform/posix/sdl/i_input.cpp
 @@ -53,6 +53,8 @@
@@ -25,7 +25,7 @@ index 32864b8..79d8307 100644
  
  // Read by G_BuildTiccmd (g_game.cpp): analog movement from the thumbsticks, -1..1.
  float g_xrMoveForward, g_xrMoveSide, g_xrSmoothTurn;
-@@ -291,6 +300,65 @@ static void XrHold(XrHeld &h, bool want, const char *plus, const char *minus)
+@@ -291,6 +300,72 @@ static void XrHold(XrHeld &h, bool want, const char *plus, const char *minus)
  	C_DoCommand(want ? plus : minus);
  }
  
@@ -41,6 +41,10 @@ index 32864b8..79d8307 100644
 +{
 +	player_t *pl = &players[consoleplayer];
 +	const uint64_t now = I_msTime();
++	static int logN = 0, lastState = -1;
++	if (lastState != tpState || ++logN % 280 == 0)
++		__android_log_print(ANDROID_LOG_INFO, "DoomXR-XR", "teleport: state=%d stick(%.2f,%.2f) mo=%d hp=%d", tpState, stickX, stickY, pl->mo != nullptr, pl->health);
++	lastState = tpState;
 +	if (pl->mo == nullptr || pl->health <= 0) { tpState = 0; return; }
 +	switch (tpState)
 +	{
@@ -48,6 +52,7 @@ index 32864b8..79d8307 100644
 +		if (stickY > 0.7f && fabsf(stickX) < 0.7f) tpState = 1;
 +		else if (now >= dashReady && (fabsf(stickX) > 0.7f || stickY < -0.7f))
 +		{
++			__android_log_print(ANDROID_LOG_INFO, "DoomXR-XR", "teleport: dash x=%.2f y=%.2f vel=(%.1f,%.1f)", stickX, stickY, pl->mo->Vel.X, pl->mo->Vel.Y);
 +			if (fabsf(stickX) > 0.7f) XrDash(pl, stickX > 0 ? 1.0 : -1.0, 0.0);
 +			else XrDash(pl, 0.0, -1.0);
 +			dashReady = now + DASH_COOLDOWN_MS;
@@ -58,6 +63,8 @@ index 32864b8..79d8307 100644
 +	{
 +		float tEnd;
 +		const bool ok = XrTeleportAimUpdate(pl, &tEnd, tpDest);
++		static int aimLog = 0;
++		if (++aimLog % 70 == 1) __android_log_print(ANDROID_LOG_INFO, "DoomXR-XR", "teleport: aim ok=%d tEnd=%.2f dest=(%.0f,%.0f,%.0f)", (int)ok, tEnd, tpDest[0], tpDest[1], tpDest[2]);
 +		xr_teleport_arc(0, ok, tEnd);
 +		if (stickY < 0.3f)
 +		{
@@ -91,7 +98,7 @@ index 32864b8..79d8307 100644
  static void XRInputTick()
  {
  	static DoomXrInput prev;
-@@ -314,6 +382,7 @@ static void XRInputTick()
+@@ -314,6 +389,7 @@ static void XRInputTick()
  
  	const bool inLevel = gamestate == GS_LEVEL && !GUICapture && menuactive == MENU_Off && ConsoleState == c_up;
  
@@ -99,12 +106,14 @@ index 32864b8..79d8307 100644
  	if (inLevel)
  	{
  		// Head rotation drives the body, like mouse look (this also keeps aim and movement along the gaze).
-@@ -324,6 +393,11 @@ static void XRInputTick()
+@@ -324,6 +400,13 @@ static void XRInputTick()
  
  		g_xrMoveForward = XrDeadzone(in.moveY);
  		g_xrMoveSide = XrDeadzone(in.moveX);
 +		if (vr_move_mode == 1)
 +		{
++			static int modeLog = 0;
++			if (++modeLog % 280 == 1) __android_log_print(ANDROID_LOG_INFO, "DoomXR-XR", "teleport mode on");
 +			g_xrMoveForward = g_xrMoveSide = 0.f;
 +			XrTeleportTick(in.moveY, in.moveX);
 +		}
@@ -232,7 +241,7 @@ index 6359624..952182f 100644
  // A panel above the left controller: health, armor, ammo of the ready weapon and the weapon slots. The game draws it
  // into the bottom-left corner of the screen image (its aspect is the panel's 512:192, a quarter of the screen high), the
 diff --git a/wadsrc/static/menudef.txt b/wadsrc/static/menudef.txt
-index 9b55288..eb104a9 100644
+index 9b55288..9d43602 100644
 --- a/wadsrc/static/menudef.txt
 +++ b/wadsrc/static/menudef.txt
 @@ -356,6 +356,12 @@ DefaultOptionMenu
