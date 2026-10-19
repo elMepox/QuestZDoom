@@ -1,0 +1,217 @@
+package io.github.elmepox.doomxr;
+
+import android.content.Intent;
+import android.content.res.AssetManager;
+import android.os.Bundle;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.util.Log;
+
+import io.github.elmepox.doomxr.mods.LaunchProfile;
+
+import org.libsdl.app.SDLActivity;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+
+/**
+ * Hosts the UZDoom engine through SDL2. Flat SDL window with an OpenXR layer (see cpp/xr) on top.
+ *
+ * Layout on the device:
+ *   getExternalFilesDir()/            user content: drop IWADs (freedoom1.wad, doom.wad ...) here
+ *   getExternalFilesDir()/config      UZDoom config + savegames (XDG_CONFIG_HOME)
+ *   getFilesDir()/data/games/uzdoom   engine resources unpacked from the APK (XDG_DATA_HOME)
+ */
+public class DoomXRActivity extends SDLActivity {
+    private static final String TAG = "DoomXR";
+    private static final String ASSET_ROOT = "uzdoom";
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        try {
+            prepareEnvironment();
+        } catch (IOException | ErrnoException e) {
+            Log.e(TAG, "Failed to prepare engine environment", e);
+        }
+        super.onCreate(savedInstanceState);
+    }
+
+    private boolean libraryStarted;
+
+    /** Shows the 2D library panel once, whichever way the game ends. */
+    private void showLibrary() {
+        if (libraryStarted) return;
+        libraryStarted = true;
+        try {
+            startActivity(new Intent(this, LibraryActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (RuntimeException e) {
+            Log.w(TAG, "could not show the library", e);
+        }
+    }
+
+    /** Called from the engine thread through JNI (menu item "Return to library"). */
+    public void returnToLibrary() {
+        runOnUiThread(() -> {
+            showLibrary();
+            finishAndRemoveTask();
+        });
+    }
+
+    /**
+     * Every normal way out of the game (engine Quit, SDL quit, the menu item above) ends in finish(), and
+     * all of them go back to the panel instead of leaving the app.
+     */
+    @Override
+    public void finish() {
+        showLibrary();
+        super.finish();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        // Closed from the system (window close): finish() may not have run, so try here as well.
+        if (isFinishing()) showLibrary();
+        // The engine cannot be started twice in one process (SDL and engine statics); the game runs in its own
+        // process (see manifest), so end it with the activity and the next "Play" starts a clean one.
+        if (isFinishing()) android.os.Process.killProcess(android.os.Process.myPid());
+    }
+
+    @Override
+    protected String[] getLibraries() {
+        return new String[] { "c++_shared", "SDL2", "openal", "main" };
+    }
+
+    @Override
+    protected String[] getArguments() {
+        // UZDoom's GLES renderer; Vulkan is not built in.
+        java.util.List<String> args = new java.util.ArrayList<>(java.util.Arrays.asList(
+                "+vid_preferbackend", "2", "+gl_es", "1",
+                // vr_mode 15 = OpenXR stereo; falls back to the flat window if OpenXR cannot start.
+                "+vr_mode", "15",
+                // Desktop launcher / IWAD picker cannot work on Android.
+                "+queryiwad", "0"));
+        LaunchProfile profile = readProfile();
+        if (profile != null) {
+            // Chosen in the library panel; an empty IWAD means the bundled Freedoom.
+            File base = getExternalFilesDir(null) != null ? getExternalFilesDir(null) : getFilesDir();
+            if (profile.iwad.isEmpty()) {
+                args.add("-iwad");
+                args.add("freedoom2.wad");
+            }
+            args.addAll(profile.toArguments(new File(base, "mods").getAbsolutePath()));
+        } else if (!hasUserIwad()) {
+            // No commercial IWAD supplied by the user: fall back to the bundled Freedoom.
+            args.add("-iwad");
+            args.add("freedoom2.wad");
+        }
+        addTestArguments(args);
+        Log.i(TAG, "engine arguments: " + args);
+        return args.toArray(new String[0]);
+    }
+
+    private LaunchProfile readProfile() {
+        try {
+            String json = getIntent() != null ? getIntent().getStringExtra(LaunchProfile.INTENT_EXTRA) : null;
+            return json == null ? null : LaunchProfile.fromJson(json);
+        } catch (Exception e) {
+            Log.w(TAG, "bad launch profile", e);
+            return null;
+        }
+    }
+
+    /**
+     * Extra engine arguments for testing without controllers:
+     *   adb shell am start -n io.github.elmepox.doomxr/.DoomXRActivity --es doomxr_args "+map map01"
+     * or a one-line file launch-args.txt in the external files dir. Whitespace separated.
+     */
+    private void addTestArguments(java.util.List<String> args) {
+        try {
+            String extra = getIntent() != null ? getIntent().getStringExtra("doomxr_args") : null;
+            File userDir = getExternalFilesDir(null);
+            File flag = userDir != null ? new File(userDir, "launch-args.txt") : null;
+            if ((extra == null || extra.trim().isEmpty()) && flag != null && flag.isFile()) {
+                extra = new String(java.nio.file.Files.readAllBytes(flag.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+            }
+            if (extra == null) return;
+            for (String a : extra.trim().split("\\s+")) {
+                if (!a.isEmpty()) args.add(a);
+            }
+            Log.i(TAG, "test arguments: " + extra.trim());
+        } catch (Exception e) {
+            Log.w(TAG, "could not read test arguments", e);
+        }
+    }
+
+    private static final String[] KNOWN_IWADS = {
+        "doom.wad", "doom1.wad", "doomu.wad", "doom2.wad", "plutonia.wad", "tnt.wad",
+        "heretic.wad", "hexen.wad", "strife1.wad", "freedoom1.wad", "freedoom2.wad", "chex.wad"
+    };
+
+    private boolean hasUserIwad() {
+        File userDir = getExternalFilesDir(null);
+        if (userDir == null) userDir = getFilesDir();
+        String[] names = userDir.list();
+        if (names == null) return false;
+        for (String n : names) {
+            for (String k : KNOWN_IWADS) if (k.equalsIgnoreCase(n)) return true;
+        }
+        return false;
+    }
+
+    private void prepareEnvironment() throws IOException, ErrnoException {
+        File userDir = getExternalFilesDir(null);
+        if (userDir == null) userDir = getFilesDir();
+        File dataHome = new File(getFilesDir(), "data");
+        File engineDir = new File(dataHome, "games/uzdoom");
+        File configHome = new File(userDir, "config");
+        File cacheHome = new File(getCacheDir(), "xdg");
+        for (File d : new File[] { engineDir, configHome, cacheHome }) {
+            if (!d.isDirectory() && !d.mkdirs()) Log.w(TAG, "Could not create " + d);
+        }
+
+        Os.setenv("HOME", userDir.getAbsolutePath(), true);
+        Os.setenv("XDG_DATA_HOME", dataHome.getAbsolutePath(), true);
+        Os.setenv("XDG_CONFIG_HOME", configHome.getAbsolutePath(), true);
+        Os.setenv("XDG_CACHE_HOME", cacheHome.getAbsolutePath(), true);
+        // The engine looks for uzdoom.pk3, soundfonts/ and fm_banks/ relative to "progdir", and for
+        // IWADs in DOOMWADDIR / DOOMWADPATH (user dir first, then the unpacked Freedoom).
+        Os.setenv("DOOMXR_PROGDIR", engineDir.getAbsolutePath(), true);
+        Os.setenv("DOOMWADDIR", userDir.getAbsolutePath(), true);
+        Os.setenv("DOOMWADPATH", userDir.getAbsolutePath() + ":" + engineDir.getAbsolutePath(), true);
+
+        Log.i(TAG, "first-run setup: engineDir=" + engineDir + " userDir=" + userDir);
+        int[] stats = new int[2]; // copied, skipped
+        copyAssets(getAssets(), ASSET_ROOT, engineDir, stats);
+        copyAssets(getAssets(), "freedoom", engineDir, stats);
+        Log.i(TAG, "assets: " + stats[0] + " copied, " + stats[1] + " already up to date");
+        String[] present = engineDir.list();
+        Log.i(TAG, "engineDir now contains: " + (present == null ? "NOTHING (missing!)" : java.util.Arrays.toString(present)));
+        Log.i(TAG, "Put IWADs into " + userDir.getAbsolutePath());
+    }
+
+    /** Recursively copies APK assets, skipping files that already match in size. */
+    private static void copyAssets(AssetManager am, String assetPath, File dest, int[] stats) throws IOException {
+        String[] children = am.list(assetPath);
+        if (children != null && children.length > 0) {
+            if (!dest.isDirectory() && !dest.mkdirs()) throw new IOException("mkdir " + dest);
+            for (String child : children) {
+                copyAssets(am, assetPath + "/" + child, new File(dest, child), stats);
+            }
+            return;
+        }
+        try (InputStream in = am.open(assetPath)) {
+            if (dest.isFile() && dest.length() == in.available()) { stats[1]++; return; }
+            Log.i(TAG, "copy " + assetPath + " -> " + dest + " (" + in.available() + " bytes)");
+            try (OutputStream out = new FileOutputStream(dest)) {
+                byte[] buf = new byte[64 * 1024];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            }
+            stats[0]++;
+        }
+    }
+}

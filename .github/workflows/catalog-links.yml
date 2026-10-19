@@ -1,0 +1,23 @@
+name: Catalog links
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/check-catalog.py catalog/catalog.json
+      - name: Commit flag changes
+        run: |
+          git diff --quiet catalog/catalog.json && exit 0
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git commit -am "catalog: update broken-link flags"
+          git push

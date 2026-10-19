@@ -1,0 +1,77 @@
+name: Android
+
+on:
+  push:
+    branches: [doomxr]
+  pull_request:
+    branches: [doomxr]
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          # external/SDL ships its own gradle-wrapper.jar, which fails validation; only the root wrapper is used.
+          validate-wrappers: false
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: android-${{ runner.os }}
+          max-size: 1G
+
+      - name: Install SDK components
+        run: |
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$(ls -d $ANDROID_HOME/cmdline-tools/*/bin | head -1):$PATH"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;28.2.13676358" \
+            "cmake;3.31.6"
+
+      - name: Build debug APK
+        run: |
+          set +e
+          ./gradlew assembleDebug --build-cache 2>&1 | tee build.log
+          rc=${PIPESTATUS[0]}
+          if [ $rc -ne 0 ]; then
+            echo "=== FAILURE SUMMARY ==="
+            grep -n -E "error:|undefined (symbol|reference)|CMake Error" build.log | cut -c1-400 | head -40
+            grep -n -A6 "FAILED:" build.log | cut -c1-300 | head -60
+          fi
+          exit $rc
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doomxr-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload native build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmake-logs
+          path: |
+            app/.cxx/**/*.txt
+            app/.cxx/**/*.log
+            app/.cxx/**/CMakeError.log
+          if-no-files-found: ignore

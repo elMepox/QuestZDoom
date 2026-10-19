@@ -1,0 +1,96 @@
+diff --git a/src/common/platform/posix/sdl/i_main.cpp b/src/common/platform/posix/sdl/i_main.cpp
+index 28ff082..e0cae30 100644
+--- a/src/common/platform/posix/sdl/i_main.cpp
++++ b/src/common/platform/posix/sdl/i_main.cpp
+@@ -45,6 +45,9 @@
+ #include "printf.h"
+ #include "version.h"
+ #include "zstring.h"
++#ifdef __ANDROID__
++#include <android/log.h>
++#endif
+ 
+ // MACROS ------------------------------------------------------------------
+ 
+@@ -240,6 +243,9 @@ int main (int argc, char **argv)
+ 		progdir = pd;
+ 		if (progdir.Len() == 0 || progdir[progdir.Len() - 1] != '/') progdir += "/";
+ 	}
++	__android_log_print(ANDROID_LOG_INFO, "UZDoom", "main(): progdir=%s argc=%d", progdir.GetChars(), argc);
++	for (int i = 0; i < argc; i++)
++		__android_log_print(ANDROID_LOG_INFO, "UZDoom", "main(): argv[%d]=%s", i, argv[i]);
+ #endif
+ 
+ 	I_StartupJoysticks();
+diff --git a/src/common/platform/posix/sdl/i_system.cpp b/src/common/platform/posix/sdl/i_system.cpp
+index 6921eed..022d55f 100644
+--- a/src/common/platform/posix/sdl/i_system.cpp
++++ b/src/common/platform/posix/sdl/i_system.cpp
+@@ -55,6 +55,9 @@
+ #include "vm.h"
+ #include "widgets/errorwindow.h"
+ #include "widgets/launcherwindow.h"
++#ifdef __ANDROID__
++#include <android/log.h>
++#endif
+ 
+ #if defined(__APPLE__)
+ int I_PickIWad_Cocoa (WadStuff *wads, int numwads, bool showwin, int defaultiwad);
+@@ -108,6 +111,13 @@ void Mac_I_FatalError(const char* errortext);
+ #ifdef __unix__
+ void Unix_I_FatalError(const char* errortext)
+ {
++#ifdef __ANDROID__
++	// No desktop error window (ZWidget) on Android: it would spin forever. Log and let the process end.
++	__android_log_print(ANDROID_LOG_FATAL, "UZDoom", "FATAL: %s", errortext);
++	if (CVMAbortException::stacktrace.IsNotEmpty())
++		__android_log_print(ANDROID_LOG_FATAL, "UZDoom", "%s", CVMAbortException::stacktrace.GetChars());
++	return;
++#endif
+ 	if (CVMAbortException::stacktrace.IsNotEmpty())
+ 	{
+ 		Printf("%s", CVMAbortException::stacktrace.GetChars());
+@@ -296,6 +306,9 @@ void I_PrintStr(const char *cp)
+ 		}
+ 	}
+ 
++#ifdef __ANDROID__
++	__android_log_write(ANDROID_LOG_INFO, "UZDoom", printData.GetChars());
++#endif
+ 	if (StartWindow) CleanProgressBar();
+ 	fputs(printData.GetChars(),stdout);
+ 	if (terminal) fputs("\033[0m",stdout);
+@@ -304,6 +317,9 @@ void I_PrintStr(const char *cp)
+ 
+ bool HoldingQueryKey(const char* key)
+ {
++#ifdef __ANDROID__
++	return false;	// would create a second SDL window
++#endif
+ 	int code = 0;
+ 
+ 	if (!stricmp(key, "shift"))
+@@ -336,6 +352,9 @@ bool HoldingQueryKey(const char* key)
+ 
+ bool I_PickIWad (bool showwin, FStartupSelectionInfo& info)
+ {
++#ifdef __ANDROID__
++	return true;	// no launcher window on Android: take the default pick
++#endif
+ 	if (!showwin)
+ 	{
+ 		return true;
+diff --git a/src/d_iwad.cpp b/src/d_iwad.cpp
+index 9dc2093..ca871ae 100644
+--- a/src/d_iwad.cpp
++++ b/src/d_iwad.cpp
+@@ -828,6 +828,9 @@ int FIWadManager::IdentifyVersion (std::vector<FileSys::ResourceName>&wadfiles,
+ 	// Present the IWAD selection box.
+ 	bool showlauncher = Args->CheckParm(FArg_showlauncher);
+ 	bool alwaysshow = (queryiwad && !Args->CheckParm(FArg_iwad) && !foundprio) || showlauncher;
++#ifdef __ANDROID__
++	alwaysshow = false;
++#endif
+ 
+ 	if (!havepicked && (alwaysshow || picks.Size() > 1))
+ 	{

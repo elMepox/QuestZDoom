@@ -1,0 +1,235 @@
+diff --git a/src/common/platform/posix/sdl/i_input.cpp b/src/common/platform/posix/sdl/i_input.cpp
+index 9bd6eb2..96bffea 100644
+--- a/src/common/platform/posix/sdl/i_input.cpp
++++ b/src/common/platform/posix/sdl/i_input.cpp
+@@ -43,6 +43,17 @@
+ #include "utf8.h"
+ #include "v_video.h"
+ #include "version.h"
++#ifdef DOOMXR_OPENXR
++#include <android/log.h>
++#include <math.h>
++#include "xr_vr.h"
++#include "g_game.h"
++#include "gamestate.h"
++#include "menustate.h"
++#include "c_console.h"
++#include "c_dispatch.h"
++#include "i_time.h"
++#endif
+ 
+ bool GUICapture;
+ static bool NativeMouse = true;
+@@ -228,6 +239,181 @@ static TMap<SDL_Scancode, uint8_t> InitKeyScanMap ()
+ }
+ static const TMap<SDL_Scancode, uint8_t> KeyScanToDIK(InitKeyScanMap());
+ 
++#ifdef DOOMXR_OPENXR
++// ---- OpenXR controllers -> engine input -------------------------------------------------------------------------
++CVAR(Int, vr_turn_mode, 1, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)				// 0 = smooth, 1 = snap
++CVAR(Float, vr_snap_turn_degrees, 30.f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++
++// Read by G_BuildTiccmd (g_game.cpp): analog movement from the thumbsticks, -1..1.
++float g_xrMoveForward, g_xrMoveSide, g_xrSmoothTurn;
++
++static float XrDeadzone(float v)
++{
++	const float a = fabsf(v);
++	if (a < 0.2f) return 0.f;
++	return (v < 0 ? -1.f : 1.f) * (a - 0.2f) / 0.8f;
++}
++
++static void XrPostKey(int key, bool down)
++{
++	event_t ev = { 0,0,0,0,0,0,0 };
++	ev.type = down ? EV_KeyDown : EV_KeyUp;
++	ev.data1 = key;
++	D_PostEvent(&ev);
++}
++
++static void XrPostGuiKey(int key, bool down)
++{
++	event_t ev = { 0,0,0,0,0,0,0 };
++	ev.type = EV_GUI_Event;
++	ev.subtype = down ? EV_GUI_KeyDown : EV_GUI_KeyUp;
++	ev.data1 = key;
++	D_PostEvent(&ev);
++}
++
++static void XrPostGui(int subtype, int x, int y)
++{
++	event_t ev = { 0,0,0,0,0,0,0 };
++	ev.type = EV_GUI_Event;
++	ev.subtype = subtype;
++	ev.data1 = x;
++	ev.data2 = y;
++	D_PostEvent(&ev);
++}
++
++// A held in-game action driven by a controller input: sends "+cmd"/"-cmd" on changes only.
++struct XrHeld { bool on = false; };
++static void XrHold(XrHeld &h, bool want, const char *plus, const char *minus)
++{
++	if (want == h.on) return;
++	h.on = want;
++	C_DoCommand(want ? plus : minus);
++}
++
++static void XRInputTick()
++{
++	static DoomXrInput prev;
++	static bool havePrev = false;
++	static XrHeld hAttack, hAlt, hUse, hSpeed, hJump, hCrouch;
++	static bool leftDown = false;
++	static int lastX = -1, lastY = -1;
++	static uint64_t lastWheel = 0;
++	static int logTick = 0;
++
++	g_xrMoveForward = g_xrMoveSide = g_xrSmoothTurn = 0.f;
++	DoomXrInput in;
++	if (!xr_input_poll(&in))
++	{
++		havePrev = false;
++		return;
++	}
++	if (!havePrev) prev = in;
++	auto pressed = [&](unsigned b) { return (in.buttons & b) && !(prev.buttons & b); };
++	auto down = [&](unsigned b) { return (in.buttons & b) != 0; };
++
++	const bool inLevel = gamestate == GS_LEVEL && !GUICapture && menuactive == MENU_Off && ConsoleState == c_up;
++
++	if (inLevel)
++	{
++		// Head rotation drives the body, like mouse look (this also keeps aim and movement along the gaze).
++		const float dy = xr_take_head_yaw_delta();
++		if (dy != 0.f) G_AddViewAngle(-(int)lroundf(dy * (65536.f / 360.f)), true);
++		const float dp = xr_take_head_pitch_delta();
++		if (dp != 0.f) G_AddViewPitch(-(int)lroundf(dp * (65536.f / 360.f)), true);
++
++		g_xrMoveForward = XrDeadzone(in.moveY);
++		g_xrMoveSide = XrDeadzone(in.moveX);
++		if (vr_turn_mode == 0)
++		{
++			g_xrSmoothTurn = XrDeadzone(in.turnX);
++		}
++		else if (fabsf(in.turnX) > 0.7f && fabsf(prev.turnX) <= 0.7f)
++		{
++			const float deg = vr_snap_turn_degrees * (in.turnX > 0 ? 1.f : -1.f);
++			G_AddViewAngle((int)lroundf(deg * (65536.f / 360.f)), true);
++		}
++		if (pressed(XRB_B)) C_DoCommand("weapnext");
++		if (pressed(XRB_Y)) C_DoCommand("weapprev");
++		if (pressed(XRB_RTHUMB)) xr_recenter();
++	}
++	XrHold(hAttack, inLevel && in.trigger[1] > 0.5f, "+attack", "-attack");
++	XrHold(hAlt, inLevel && in.trigger[0] > 0.5f, "+altattack", "-altattack");
++	XrHold(hUse, inLevel && in.grip[1] > 0.5f, "+use", "-use");
++	XrHold(hSpeed, inLevel && in.grip[0] > 0.5f, "+speed", "-speed");
++	XrHold(hJump, inLevel && down(XRB_A), "+jump", "-jump");
++	XrHold(hCrouch, inLevel && down(XRB_X), "+crouch", "-crouch");
++
++	if (pressed(XRB_MENU) || (!inLevel && pressed(XRB_B)))
++	{
++		if (GUICapture) { XrPostGuiKey(GK_ESCAPE, true); XrPostGuiKey(GK_ESCAPE, false); }
++		else { XrPostKey(DIK_ESCAPE, true); XrPostKey(DIK_ESCAPE, false); }
++	}
++
++	if (!inLevel)
++	{
++		const int hand = in.uiHand;
++		if (in.uiHit)
++		{
++			event_t tmp = { 0,0,0,0,0,0,0 };
++			tmp.data1 = (int)(in.uiU * screen->GetClientWidth());
++			tmp.data2 = (int)(in.uiV * screen->GetClientHeight());
++			screen->ScaleCoordsFromWindow(tmp.data1, tmp.data2);
++			if (GUICapture && (tmp.data1 != lastX || tmp.data2 != lastY))
++			{
++				XrPostGui(EV_GUI_MouseMove, tmp.data1, tmp.data2);
++			}
++			lastX = tmp.data1;
++			lastY = tmp.data2;
++			if (!prev.uiHit) xr_haptic(hand, 0.2f, 0.02f);
++		}
++		const bool trig = in.trigger[hand] > 0.6f, ptrig = prev.trigger[hand] > 0.6f;
++		if (trig != ptrig)
++		{
++			if (trig) xr_haptic(hand, 0.5f, 0.03f);
++			if (GUICapture)
++			{
++				if (in.uiHit || !trig)
++				{
++					XrPostGui(trig ? EV_GUI_LButtonDown : EV_GUI_LButtonUp, lastX, lastY);
++					leftDown = trig;
++				}
++			}
++			else
++			{
++				// Title / intermission screens: any key. Treat the trigger as Enter.
++				XrPostKey(DIK_RETURN, trig);
++			}
++		}
++		if (pressed(XRB_A))
++		{
++			if (GUICapture) { XrPostGuiKey(GK_RETURN, true); XrPostGuiKey(GK_RETURN, false); }
++			else { XrPostKey(DIK_RETURN, true); XrPostKey(DIK_RETURN, false); }
++		}
++		if (GUICapture)
++		{
++			const float sy = fabsf(in.turnY) > fabsf(in.moveY) ? in.turnY : in.moveY;
++			const uint64_t now = I_msTime();
++			if (fabsf(sy) > 0.6f && now - lastWheel > 120)
++			{
++				lastWheel = now;
++				XrPostGui(sy > 0 ? EV_GUI_WheelUp : EV_GUI_WheelDown, lastX, lastY);
++			}
++		}
++	}
++	else if (leftDown)
++	{
++		XrPostGui(EV_GUI_LButtonUp, lastX, lastY);
++		leftDown = false;
++	}
++
++	if (++logTick % 140 == 1)
++		__android_log_print(ANDROID_LOG_INFO, "DoomXR-XR", "input: inLevel=%d guiCapture=%d stick L(%.2f,%.2f) R(%.2f,%.2f) trig %.2f/%.2f grip %.2f/%.2f buttons=0x%x uiHit=%d (%.2f,%.2f)",
++		                    (int)inLevel, (int)GUICapture, in.moveX, in.moveY, in.turnX, in.turnY, in.trigger[0], in.trigger[1], in.grip[0], in.grip[1], in.buttons, in.uiHit, in.uiU, in.uiV);
++	prev = in;
++	havePrev = true;
++}
++#endif
++
+ static void I_CheckGUICapture ()
+ {
+ 	bool wantCapt = sysCallbacks.WantGuiCapture && sysCallbacks.WantGuiCapture();
+@@ -686,6 +872,9 @@ void I_StartTic ()
+ 	I_CheckGUICapture ();
+ 	I_CheckNativeMouse ();
+ 	I_GetEvent ();
++#ifdef DOOMXR_OPENXR
++	XRInputTick();
++#endif
+ 	Joy_RumbleTick();
+ }
+ 
+diff --git a/src/g_game.cpp b/src/g_game.cpp
+index 134d98e..7cda93a 100644
+--- a/src/g_game.cpp
++++ b/src/g_game.cpp
+@@ -692,6 +692,16 @@ void G_BuildTiccmd (usercmd_t *cmd)
+ 	axis_side = buttonMap.ButtonAnalog(Button_MoveLeft) - buttonMap.ButtonAnalog(Button_MoveRight);
+ 	axis_up = buttonMap.ButtonAnalog(Button_MoveUp) - buttonMap.ButtonAnalog(Button_MoveDown);
+ 
++#ifdef DOOMXR_OPENXR
++	{
++		// OpenXR thumbsticks (see i_input.cpp): forward, strafe right, turn right.
++		extern float g_xrMoveForward, g_xrMoveSide, g_xrSmoothTurn;
++		axis_forward += g_xrMoveForward;
++		axis_side -= g_xrMoveSide;
++		axis_yaw -= g_xrSmoothTurn;
++	}
++#endif
++
+ 	if (cl_analog_straferun)
+ 	{
+ 		// Rescale diagonal analog input from roughly [0.77, 0.77] to [1.0, 1.0],

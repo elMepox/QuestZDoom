@@ -1,0 +1,27 @@
+name: modcore
+
+on:
+  push:
+    paths: ["modcore/**", ".github/workflows/modcore.yml"]
+  pull_request:
+    paths: ["modcore/**", ".github/workflows/modcore.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.14.3
+      # Standalone: the module has no Android dependencies, so no SDK is needed.
+      - name: Test
+        run: |
+          mkdir /tmp/mc && cp -r modcore/. /tmp/mc/
+          cd /tmp/mc
+          printf 'rootProject.name="modcore"\ndependencyResolutionManagement { repositories { mavenCentral() } }\n' > settings.gradle.kts
+          gradle --no-daemon test

@@ -1,0 +1,77 @@
+{
+  // Local build / install / run of DoomXR on a Quest over adb. Run with Cmd+Shift+B (default task: build, install, launch).
+  // The headset address is asked once per task run (input "questAddress"); change its default below if the IP differs.
+  // Needs: JDK 17, Android SDK + NDK (see app/build.gradle.kts), `adb` on PATH, and `git submodule update --init --recursive`.
+  "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "questAddress",
+      "type": "promptString",
+      "description": "Quest adb address (ip:port over Wi-Fi, or a USB serial)",
+      "default": "192.168.1.60:5555"
+    }
+  ],
+  "tasks": [
+    {
+      "label": "DoomXR: connect headset (Wi-Fi)",
+      "type": "shell",
+      "command": "adb connect \"$QUEST\" && adb devices",
+      "options": { "env": { "QUEST": "${input:questAddress}" } },
+      "problemMatcher": [],
+      "detail": "adb connect. After a headset reboot adb tcpip is lost: plug in USB once and run `adb tcpip 5555` (or scripts/quest-wifi-adb.sh if you have it)."
+    },
+    {
+      "label": "DoomXR: build",
+      "type": "shell",
+      "command": "./gradlew assembleDebug",
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": [],
+      "detail": "Applies engine patches, builds the debug APK: app/build/outputs/apk/debug/app-debug.apk"
+    },
+    {
+      "label": "DoomXR: install on headset",
+      "type": "shell",
+      "command": "adb -s \"$QUEST\" install -r app/build/outputs/apk/debug/app-debug.apk",
+      "options": { "env": { "QUEST": "${input:questAddress}" } },
+      "problemMatcher": [],
+      "detail": "Installs the last built APK (does not build)."
+    },
+    {
+      "label": "DoomXR: launch on headset",
+      "type": "shell",
+      "command": "adb -s \"$QUEST\" shell am start -n io.github.elmepox.doomxr/.LibraryActivity",
+      "options": { "env": { "QUEST": "${input:questAddress}" } },
+      "problemMatcher": [],
+      "detail": "Starts the mod library (the app's entry point); the game itself starts from there."
+    },
+    {
+      "label": "DoomXR: build, install and launch",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "DoomXR: build",
+        "DoomXR: install on headset",
+        "DoomXR: launch on headset"
+      ],
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "DoomXR: logcat",
+      "type": "shell",
+      "command": "adb -s \"$QUEST\" logcat -v time | grep --line-buffered -iE 'doomxr|zdoom|AndroidRuntime|libc  *: Fatal|DEBUG'",
+      "options": { "env": { "QUEST": "${input:questAddress}" } },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "detail": "Live filtered log. Add `adb logcat -c` first for a clean start."
+    },
+    {
+      "label": "DoomXR: stop app on headset",
+      "type": "shell",
+      "command": "adb -s \"$QUEST\" shell am force-stop io.github.elmepox.doomxr",
+      "options": { "env": { "QUEST": "${input:questAddress}" } },
+      "problemMatcher": []
+    }
+  ]
+}

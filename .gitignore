@@ -26,15 +26,31 @@ $RECYCLE.BIN/
 *.ap_
 *.class
 drbeef-release-key.keystore
-projects/Android/build/*
-Projects/Android/.cxx/*
 *.json
-Projects/Android/.externalNativeBuild/*
 *.bin
 *.ser
-Projects/Android/.idea/*
 .gradle/*
-Projects/Android/.gradle/*
-Projects/Android/Android.iml
-Projects/Android/libs/arm64-v8a/libopenxr_loader_meta.so
-Projects/Android/libs/arm64-v8a/libopenxr_loader_pico.so
+# Gradle / Android
+.gradle/
+build/
+app/build/
+app/.cxx/
+local.properties
+*.iml
+.idea/
+captures/
+
+# VS Code: share the tasks, ignore the rest
+!.vscode/
+!.vscode/tasks.json
+!.vscode/extensions.json
+
+# Local logs and profiles (logcat dumps, build timings, Gradle/CMake profiles)
+*.log
+logcat*.txt
+build-timings*.txt
+build-cmake-configure-trace*.json
+build/reports/
+reports/profile/
+*.perfetto-trace
+*.hprof

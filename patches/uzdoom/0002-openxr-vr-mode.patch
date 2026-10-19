@@ -1,0 +1,326 @@
+diff --git a/src/common/platform/posix/sdl/sdlglvideo.cpp b/src/common/platform/posix/sdl/sdlglvideo.cpp
+index 27e39a5..df33338 100644
+--- a/src/common/platform/posix/sdl/sdlglvideo.cpp
++++ b/src/common/platform/posix/sdl/sdlglvideo.cpp
+@@ -47,6 +47,9 @@
+ 
+ #ifdef HAVE_GLES2
+ #include "gles_framebuffer.h"
++#ifdef DOOMXR_OPENXR
++#include "xr_vr.h"
++#endif
+ #endif
+ 
+ #ifdef HAVE_VULKAN
+@@ -574,6 +577,10 @@ SystemGLFrameBuffer::SystemGLFrameBuffer(void *hMonitor, bool fullscreen)
+ 	{
+ 		I_FatalError("Could not create OpenGL window:\n%s\n",SDL_GetError());
+ 	}
++#ifdef DOOMXR_OPENXR
++	// The GL context exists now; bring up OpenXR on it. On failure we simply stay a flat window.
++	xr_init();
++#endif
+ }
+ 
+ SystemGLFrameBuffer::~SystemGLFrameBuffer ()
+@@ -592,6 +599,9 @@ SystemGLFrameBuffer::~SystemGLFrameBuffer ()
+ int SystemGLFrameBuffer::GetClientWidth()
+ {
+ 	int width = 0;
++#ifdef DOOMXR_OPENXR
++	if (xr_is_initialized()) { xr_get_render_size(&width, nullptr); return width; }
++#endif
+ 	SDL_GL_GetDrawableSize(Priv::window, &width, nullptr);
+ 	return width;
+ }
+@@ -599,6 +609,9 @@ int SystemGLFrameBuffer::GetClientWidth()
+ int SystemGLFrameBuffer::GetClientHeight()
+ {
+ 	int height = 0;
++#ifdef DOOMXR_OPENXR
++	if (xr_is_initialized()) { xr_get_render_size(nullptr, &height); return height; }
++#endif
+ 	SDL_GL_GetDrawableSize(Priv::window, nullptr, &height);
+ 	return height;
+ }
+diff --git a/src/common/rendering/gles/gles_framebuffer.cpp b/src/common/rendering/gles/gles_framebuffer.cpp
+index 0d217b4..28dd1a1 100644
+--- a/src/common/rendering/gles/gles_framebuffer.cpp
++++ b/src/common/rendering/gles/gles_framebuffer.cpp
+@@ -47,6 +47,11 @@
+ 
+ #include "flatvertices.h"
+ #include "hw_cvars.h"
++#ifdef DOOMXR_OPENXR
++#include "xr_vr.h"
++#include "menustate.h"
++#include "c_console.h"
++#endif
+ 
+ EXTERN_CVAR (Bool, vid_vsync)
+ EXTERN_CVAR(Int, gl_tonemap)
+@@ -233,6 +238,12 @@ void OpenGLFrameBuffer::Swap()
+ 	mVertexData->DropSync();
+ 
+ 	FPSLimit();
++#ifdef DOOMXR_OPENXR
++	// Show the flat 2D screen in the headset while a menu/console is up or when no 3D view was rendered.
++	const bool uiWanted = menuactive != MENU_Off || ConsoleState != c_up || !xrEyesRendered;
++	xrEyesRendered = false;
++	if (!xr_frame_end(uiWanted))
++#endif
+ 	SwapBuffers();
+ 
+ 	mVertexData->NextPipelineBuffer();
+@@ -324,6 +335,17 @@ FRenderState* OpenGLFrameBuffer::RenderState()
+ }
+ 
+ 
++void OpenGLFrameBuffer::XrEyeFinished(int eye)
++{
++#ifdef DOOMXR_OPENXR
++	GLRenderer->mBuffers->BindCurrentFB();
++	GLint fbo = 0;
++	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
++	xr_eye_blit(eye, (unsigned)fbo, mScreenViewport.width, mScreenViewport.height);
++	xrEyesRendered = true;
++#endif
++}
++
+ void OpenGLFrameBuffer::FirstEye()
+ {
+ 	//GLRenderer->mBuffers->CurrentEye() = 0;  // always begin at zero, in case eye count changed
+@@ -357,6 +379,9 @@ void OpenGLFrameBuffer::WaitForCommands(bool finish)
+ 
+ void OpenGLFrameBuffer::BeginFrame()
+ {
++#ifdef DOOMXR_OPENXR
++	xr_frame_begin();	// must precede SetViewportRects: the stereo mode decides the viewport
++#endif
+ 	SetViewportRects(nullptr);
+ 	mViewpoints->Clear();
+ 	if (GLRenderer != nullptr)
+diff --git a/src/common/rendering/gles/gles_framebuffer.h b/src/common/rendering/gles/gles_framebuffer.h
+index 9b2a7fe..cdeeae1 100644
+--- a/src/common/rendering/gles/gles_framebuffer.h
++++ b/src/common/rendering/gles/gles_framebuffer.h
+@@ -66,6 +66,7 @@ public:
+ 	void PrecacheMaterial(FMaterial *mat, int translation) override;
+ 	void BeginFrame() override;
+ 	void SetViewportRects(IntRect *bounds) override;
++	void XrEyeFinished(int eye) override;
+ 	IVertexBuffer *CreateVertexBuffer() override;
+ 	IIndexBuffer *CreateIndexBuffer() override;
+ 	IDataBuffer *CreateDataBuffer(int bindingpoint, bool ssbo, bool needsresize) override;
+@@ -89,6 +90,7 @@ public:
+ 	FTexture *WipeEndScreen() override;
+ 
+ 	int camtexcount = 0;
++	bool xrEyesRendered = false;
+ 
+ 	virtual bool HasNVidiaVRAMExt() override;
+ 	virtual bool HasATIVRAMExt() override;
+diff --git a/src/common/rendering/gles/gles_renderbuffers.cpp b/src/common/rendering/gles/gles_renderbuffers.cpp
+index 1cba889..a6f94c3 100644
+--- a/src/common/rendering/gles/gles_renderbuffers.cpp
++++ b/src/common/rendering/gles/gles_renderbuffers.cpp
+@@ -29,6 +29,9 @@
+ #include "gles_postprocessstate.h"
+ #include "gles_shaderprogram.h"
+ #include "gles_buffers.h"
++#ifdef DOOMXR_OPENXR
++#include "xr_vr.h"
++#endif
+ 
+ #include <random>
+ 
+@@ -414,7 +417,12 @@ namespace OpenGLESRenderer
+ 
+ 	void FGLRenderBuffers::BindOutputFB()
+ 	{
++#ifdef DOOMXR_OPENXR
++		// In the headset the flat screen goes into an OpenXR swapchain instead of the window.
++		glBindFramebuffer(GL_FRAMEBUFFER, xr_ui_target_fbo());
++#else
+ 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
++#endif
+ 	}
+ 
+ 	//==========================================================================
+diff --git a/src/common/rendering/hwrenderer/data/hw_vrmodes.cpp b/src/common/rendering/hwrenderer/data/hw_vrmodes.cpp
+index a7f513b..29c698d 100644
+--- a/src/common/rendering/hwrenderer/data/hw_vrmodes.cpp
++++ b/src/common/rendering/hwrenderer/data/hw_vrmodes.cpp
+@@ -28,6 +28,9 @@
+ #include "v_video.h"
+ #include "version.h"
+ #include "i_interface.h"
++#ifdef DOOMXR_OPENXR
++#include "xr_vr.h"
++#endif
+ 
+ // Set up 3D-specific console variables:
+ CVAR(Int, vr_mode, 0, CVAR_GLOBALCONFIG|CVAR_ARCHIVE)
+@@ -46,13 +49,14 @@ CVAR(Float, vr_hunits_per_meter, 41.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG) // MET
+ 
+ 
+ #define isqrt2 0.7071067812f
+-static VRMode vrmi_mono = { 1, 1.f, 1.f, 1.f,{ { 0.f, 1.f },{ 0.f, 0.f } } };
++static VRMode vrmi_mono = { 1, 1.f, 1.f, 1.f,{ { 0.f, 1.f },{ 0.f, 0.f } }, false };
+ static VRMode vrmi_stereo = { 2, 1.f, 1.f, 1.f,{ { -.5f, 1.f },{ .5f, 1.f } } };
+ static VRMode vrmi_sbsfull = { 2, .5f, 1.f, 2.f,{ { -.5f, .5f },{ .5f, .5f } } };
+ static VRMode vrmi_sbssquished = { 2, .5f, 1.f, 1.f,{ { -.5f, 1.f },{ .5f, 1.f } } };
+ static VRMode vrmi_lefteye = { 1, 1.f, 1.f, 1.f, { { -.5f, 1.f },{ 0.f, 0.f } } };
+ static VRMode vrmi_righteye = { 1, 1.f, 1.f, 1.f,{ { .5f, 1.f },{ 0.f, 0.f } } };
+ static VRMode vrmi_topbottom = { 2, 1.f, .5f, 1.f,{ { -.5f, 1.f },{ .5f, 1.f } } };
++static VRMode vrmi_openxr = { 2, 1.f, 1.f, 1.f,{ { -.5f, 1.f },{ .5f, 1.f } }, true };
+ static VRMode vrmi_checker = { 2, isqrt2, isqrt2, 1.f,{ { -.5f, 1.f },{ .5f, 1.f } } };
+ 
+ static float DEG2RAD(float deg)
+@@ -101,6 +105,11 @@ const VRMode *VRMode::GetVRMode(bool toscreen)
+ 
+ 	case VR_CHECKERINTERLEAVED:
+ 		return &vrmi_checker;
++
++#ifdef DOOMXR_OPENXR
++	case VR_OPENXR:
++		return xr_frame_active() ? &vrmi_openxr : &vrmi_mono;
++#endif
+ 	}
+ }
+ 
+diff --git a/src/common/rendering/hwrenderer/data/hw_vrmodes.h b/src/common/rendering/hwrenderer/data/hw_vrmodes.h
+index 90093b0..ebf81c0 100644
+--- a/src/common/rendering/hwrenderer/data/hw_vrmodes.h
++++ b/src/common/rendering/hwrenderer/data/hw_vrmodes.h
+@@ -43,7 +43,8 @@ enum
+ 	VR_TOPBOTTOM = 11,
+ 	VR_ROWINTERLEAVED = 12,
+ 	VR_COLUMNINTERLEAVED = 13,
+-	VR_CHECKERINTERLEAVED = 14
++	VR_CHECKERINTERLEAVED = 14,
++	VR_OPENXR = 15
+ };
+ 
+ struct VREyeInfo
+@@ -65,8 +66,10 @@ struct VRMode
+ 	float mVerticalViewportScale;
+ 	float mWeaponProjectionScale;
+ 	VREyeInfo mEyes[2];
++	bool mOpenXR;	// per-eye pose/projection come from the OpenXR layer
+ 
+ 	static const VRMode *GetVRMode(bool toscreen = true);
++	bool IsOpenXR() const { return mOpenXR; }
+ 	void AdjustViewport(DFrameBuffer *fb) const;
+ 	VSMatrix GetHUDSpriteProjection() const;
+ };
+diff --git a/src/common/rendering/v_video.h b/src/common/rendering/v_video.h
+index 8c17cf9..7744be9 100644
+--- a/src/common/rendering/v_video.h
++++ b/src/common/rendering/v_video.h
+@@ -233,6 +233,8 @@ public:
+ 	virtual void PrecacheMaterial(FMaterial *mat, int translation) {}
+ 	virtual FMaterial* CreateMaterial(FGameTexture* tex, int scaleflags);
+ 	virtual void BeginFrame() {}
++	// OpenXR: the finished image of the given eye is ready in the current scene buffer.
++	virtual void XrEyeFinished(int eye) {}
+ 	virtual void SetWindowSize(int w, int h) {}
+ 	virtual void StartPrecaching() {}
+ 	virtual FRenderState* RenderState() { return nullptr; }
+diff --git a/src/rendering/hwrenderer/hw_entrypoint.cpp b/src/rendering/hwrenderer/hw_entrypoint.cpp
+index 963f605..c79ef1c 100644
+--- a/src/rendering/hwrenderer/hw_entrypoint.cpp
++++ b/src/rendering/hwrenderer/hw_entrypoint.cpp
+@@ -41,6 +41,10 @@
+ #include "hwrenderer/scene/hw_clipper.h"
+ #include "hwrenderer/scene/hw_portal.h"
+ #include "hw_vrmodes.h"
++#ifdef DOOMXR_OPENXR
++#include "xr_vr.h"
++EXTERN_CVAR(Float, vr_hunits_per_meter)
++#endif
+ 
+ EXTERN_CVAR(Bool, cl_capfps)
+ extern bool NoInterpolateView;
+@@ -130,6 +134,15 @@ sector_t* RenderViewpoint(FRenderViewpoint& mainvp, AActor* camera, IntRect* bou
+ 	{
+ 		const auto& eye = vrmode->mEyes[eye_ix];
+ 		screen->SetViewportRects(bounds);
++#ifdef DOOMXR_OPENXR
++		DoomXrEyeView xrEye = {};
++		const bool xrView = vrmode->IsOpenXR() && xr_get_eye_view(eye_ix, &xrEye);
++		if (xrView)
++		{
++			// The eye image always covers the whole virtual screen (no status bar border / letterbox).
++			screen->mSceneViewport = screen->mScreenViewport;
++		}
++#endif
+ 
+ 		if (mainview) // Bind the scene frame buffer and turn on draw buffers used by ssao
+ 		{
+@@ -152,6 +165,34 @@ sector_t* RenderViewpoint(FRenderViewpoint& mainvp, AActor* camera, IntRect* bou
+ 
+ 		di->Viewpoint.FieldOfView = DAngle::fromDeg(fov);	// Set the real FOV for the current scene (it's not necessarily the same as the global setting in r_viewpoint)
+ 
++#ifdef DOOMXR_OPENXR
++		if (xrView)
++		{
++			// Asymmetric frustum straight from the headset's field of view.
++			const float zn = screen->GetZNear(), zf = screen->GetZFar();
++			VSMatrix xrProj(1);
++			xrProj.frustum(zn * xrEye.tanLeft, zn * xrEye.tanRight, zn * xrEye.tanDown, zn * xrEye.tanUp, zn, zf);
++			di->VPUniforms.mProjectionMatrix = xrProj;
++			di->ProjectionMatrix2 = xrProj;
++
++			// Head orientation on top of the player's heading; head position as an offset from the recenter point.
++			const double stretch = camera->Level->info->pixelstretch;
++			const double scale = vr_hunits_per_meter / stretch;	// horizontal doom units per meter
++			const double baseYaw = vp.Angles.Yaw.Degrees();
++			const double cy = cos(DAngle::fromDeg(baseYaw).Radians()), sy = sin(DAngle::fromDeg(baseYaw).Radians());
++			vp.Pos.X += scale * (xrEye.forward * cy + xrEye.right * sy);
++			vp.Pos.Y += scale * (xrEye.forward * sy - xrEye.right * cy);
++			vp.Pos.Z += scale * xrEye.up / stretch;
++			vp.Angles.Yaw = DAngle::fromDeg(baseYaw + xrEye.yaw);
++			vp.Angles.Pitch = DAngle::fromDeg(xrEye.pitch);
++			vp.Angles.Roll = DAngle::fromDeg(xrEye.roll);
++			vp.HWAngles.Pitch = FAngle::fromDeg(xrEye.pitch);
++			vp.HWAngles.Roll = FAngle::fromDeg(xrEye.roll);
++			di->SetupView(RenderState, vp.Pos.X, vp.Pos.Y, vp.Pos.Z, false, false);
++		}
++		else
++#endif
++		{
+ 		// Stereo mode specific perspective projection
+ 		float inv_iso_dist = 1.0f;
+ 		bool iso_ortho = (camera->ViewPos != NULL) && (camera->ViewPos->Flags & VPSF_ORTHOGRAPHIC);
+@@ -162,6 +203,7 @@ sector_t* RenderViewpoint(FRenderViewpoint& mainvp, AActor* camera, IntRect* bou
+ 		// Stereo mode specific viewpoint adjustment
+ 		vp.Pos += eye.GetViewShift(vp.HWAngles.Yaw.Degrees());
+ 		di->SetupView(RenderState, vp.Pos.X, vp.Pos.Y, vp.Pos.Z, false, false);
++		}
+ 
+ 		di->ProcessScene(toscreen);
+ 
+@@ -183,6 +225,9 @@ sector_t* RenderViewpoint(FRenderViewpoint& mainvp, AActor* camera, IntRect* bou
+ 		RenderState.SetSpecialColormap(CM_DEFAULT, 1);
+ 
+ 		di->EndDrawInfo();
++#ifdef DOOMXR_OPENXR
++		if (xrView) screen->XrEyeFinished(eye_ix);
++#endif
+ 		if (eyeCount - eye_ix > 1)
+ 			screen->NextEye(eyeCount);
+ 	}
+diff --git a/src/rendering/hwrenderer/scene/hw_drawinfo.cpp b/src/rendering/hwrenderer/scene/hw_drawinfo.cpp
+index 44caf3c..e13390d 100644
+--- a/src/rendering/hwrenderer/scene/hw_drawinfo.cpp
++++ b/src/rendering/hwrenderer/scene/hw_drawinfo.cpp
+@@ -949,7 +949,7 @@ void HWDrawInfo::DrawEndScene2D(sector_t * viewsector, FRenderState &state)
+ 	state.EnableDepthTest(false);
+ 	state.EnableMultisampling(false);
+ 
+-	DrawPlayerSprites(false, state);
++	if (!vrmode->IsOpenXR()) DrawPlayerSprites(false, state);	// a screen-fixed weapon is wrong in stereo (stage 4)
+ 
+ 	state.SetNoSoftLightLevel();
+ 

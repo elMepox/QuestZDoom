@@ -1,0 +1,48 @@
+diff --git a/libraries/ZMusic/source/mididevices/music_fluidsynth_stub.cpp b/libraries/ZMusic/source/mididevices/music_fluidsynth_stub.cpp
+index 9517b06..81d11ec 100644
+--- a/libraries/ZMusic/source/mididevices/music_fluidsynth_stub.cpp
++++ b/libraries/ZMusic/source/mididevices/music_fluidsynth_stub.cpp
+@@ -1,4 +1,5 @@
+ // FluidSynth needs GLib, which is unavailable on Android: report "no device" instead.
++#include <stdexcept>
+ #include "mididevice.h"
+ #include "zmusic/midiconfig.h"
+ 
+@@ -7,5 +8,6 @@ FluidConfig fluidConfig;
+ 
+ MIDIDevice *CreateFluidSynthMIDIDevice(int samplerate, const char *Args)
+ {
+-	return nullptr;
++	// Must throw: MIDIStreamer::CreateMIDIDevice only moves on to the next device on std::runtime_error.
++	throw std::runtime_error("FluidSynth is not available on Android");
+ }
+diff --git a/libraries/ZMusic/source/musicformats/music_midi.cpp b/libraries/ZMusic/source/musicformats/music_midi.cpp
+index 03dc4d1..fb08ccd 100644
+--- a/libraries/ZMusic/source/musicformats/music_midi.cpp
++++ b/libraries/ZMusic/source/musicformats/music_midi.cpp
+@@ -310,6 +310,8 @@ MIDIDevice *MIDIStreamer::CreateMIDIDevice(EMidiDevice devtype, int samplerate)
+ 			default:
+ 				break;
+ 			}
++			// A device that returns nullptr instead of throwing would make this loop spin forever.
++			if (dev == nullptr) throw std::runtime_error("MIDI device is not available");
+ 		}
+ 		catch (std::runtime_error &err)
+ 		{
+diff --git a/src/common/audio/music/music_midi_base.cpp b/src/common/audio/music/music_midi_base.cpp
+index d09ed32..29921ad 100644
+--- a/src/common/audio/music/music_midi_base.cpp
++++ b/src/common/audio/music/music_midi_base.cpp
+@@ -31,7 +31,12 @@
+ #include "c_cvars.h"
+ #include "printf.h"
+ 
++#ifdef __ANDROID__
++// FluidSynth does not exist on Android; OPL emulation needs no extra files (GENMIDI comes from the IWAD / uzdoom.pk3).
++#define DEF_MIDIDEV -3
++#else
+ #define DEF_MIDIDEV -5
++#endif
+ 
+ EXTERN_CVAR(Int, snd_mididevice)
+ 
