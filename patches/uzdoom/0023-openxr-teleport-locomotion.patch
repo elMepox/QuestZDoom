@@ -1,0 +1,228 @@
+diff --git a/src/common/platform/posix/sdl/i_input.cpp b/src/common/platform/posix/sdl/i_input.cpp
+index 32864b8..e208615 100644
+--- a/src/common/platform/posix/sdl/i_input.cpp
++++ b/src/common/platform/posix/sdl/i_input.cpp
+@@ -53,6 +53,8 @@
+ #include "c_console.h"
+ #include "c_dispatch.h"
+ #include "i_time.h"
++#include "d_player.h"
++#include "doomstat.h"
+ #endif
+ 
+ bool GUICapture;
+@@ -244,6 +246,12 @@ static const TMap<SDL_Scancode, uint8_t> KeyScanToDIK(InitKeyScanMap());
+ EXTERN_CVAR(Bool, vr_dual_wield)
+ CVAR(Int, vr_turn_mode, 1, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)				// 0 = smooth, 1 = snap
+ CVAR(Float, vr_snap_turn_degrees, 30.f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)
++CVAR(Int, vr_move_mode, 0, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)				// 0 = smooth (left stick), 1 = teleport (push the left stick forward, aim the arc, release)
++
++// Teleport targeting and the jump itself live next to the other VR gameplay code in p_pspr.cpp.
++struct player_t;
++bool XrTeleportAimUpdate(player_t *p, float *tEnd, double *dest);
++void XrTeleportGo(player_t *p, const double *dest);
+ 
+ // Read by G_BuildTiccmd (g_game.cpp): analog movement from the thumbsticks, -1..1.
+ float g_xrMoveForward, g_xrMoveSide, g_xrSmoothTurn;
+@@ -291,6 +299,56 @@ static void XrHold(XrHeld &h, bool want, const char *plus, const char *minus)
+ 	C_DoCommand(want ? plus : minus);
+ }
+ 
++// Teleport: stick forward starts aiming, release jumps (fade out, move, fade in). An unusable aim just cancels.
++static int tpState = 0;				// 0 idle, 1 aiming, 2 fading out, 3 fading in
++static uint64_t tpT0 = 0;
++static double tpDest[3];
++static const uint64_t TP_FADE_OUT_MS = 110, TP_FADE_IN_MS = 160;
++
++static void XrTeleportTick(float stickY, float stickX)
++{
++	player_t *pl = &players[consoleplayer];
++	const uint64_t now = I_msTime();
++	if (pl->mo == nullptr || pl->health <= 0) { tpState = 0; return; }
++	switch (tpState)
++	{
++	case 0:
++		if (stickY > 0.7f && fabsf(stickX) < 0.7f) tpState = 1;
++		break;
++	case 1:
++	{
++		float tEnd;
++		const bool ok = XrTeleportAimUpdate(pl, &tEnd, tpDest);
++		xr_teleport_arc(0, ok, tEnd);
++		if (stickY < 0.3f)
++		{
++			if (ok) { tpState = 2; tpT0 = now; xr_haptic(0, 0.4f, 0.04f); }
++			else tpState = 0;
++		}
++		break;
++	}
++	case 2:
++	{
++		const float a = (float)(now - tpT0) / (float)TP_FADE_OUT_MS;
++		xr_fade_set(a > 1.f ? 1.f : a);
++		if (a >= 1.f)
++		{
++			XrTeleportGo(pl, tpDest);
++			tpState = 3;
++			tpT0 = now;
++		}
++		break;
++	}
++	case 3:
++	{
++		const float a = 1.f - (float)(now - tpT0) / (float)TP_FADE_IN_MS;
++		if (a <= 0.f) tpState = 0;
++		else xr_fade_set(a);
++		break;
++	}
++	}
++}
++
+ static void XRInputTick()
+ {
+ 	static DoomXrInput prev;
+@@ -314,6 +372,7 @@ static void XRInputTick()
+ 
+ 	const bool inLevel = gamestate == GS_LEVEL && !GUICapture && menuactive == MENU_Off && ConsoleState == c_up;
+ 
++	if (!inLevel) tpState = 0;
+ 	if (inLevel)
+ 	{
+ 		// Head rotation drives the body, like mouse look (this also keeps aim and movement along the gaze).
+@@ -324,6 +383,11 @@ static void XRInputTick()
+ 
+ 		g_xrMoveForward = XrDeadzone(in.moveY);
+ 		g_xrMoveSide = XrDeadzone(in.moveX);
++		if (vr_move_mode == 1)
++		{
++			g_xrMoveForward = g_xrMoveSide = 0.f;
++			XrTeleportTick(in.moveY, in.moveX);
++		}
+ 		if (vr_turn_mode == 0)
+ 		{
+ 			g_xrSmoothTurn = XrDeadzone(in.turnX);
+diff --git a/src/playsim/p_pspr.cpp b/src/playsim/p_pspr.cpp
+index 6359624..9ca9f92 100644
+--- a/src/playsim/p_pspr.cpp
++++ b/src/playsim/p_pspr.cpp
+@@ -224,6 +224,95 @@ void XrAimLaser(player_t *p)
+ 	if (p->FindPSprite(PSP_LEFT) != nullptr) XrAimLaserHand(p, 0);
+ }
+ 
++// ---- teleport locomotion ----
++// The left controller throws an arc (launch speed and gravity from xr_vr.h, so the OpenXR side draws the same curve);
++// where it meets the floor is the destination. The caller (i_input.cpp) fades the view and then calls XrTeleportGo.
++// Returns whether the destination is usable: a step up of at most 48 units, room for the player, nothing solid between.
++bool XrTeleportAimUpdate(player_t *p, float *tEnd, double *dest)
++{
++	*tEnd = 0.f;
++	AActor *m = p->mo;
++	if (m == nullptr) return false;
++	const double stretch = m->Level->info->pixelstretch;
++	const double upm = vr_hunits_per_meter / stretch;
++	DoomXrHand h;
++	if (!xr_get_hand(0, m->X(), m->Y(), p->viewz, m->Angles.Yaw.Degrees(), upm, stretch, &h)) return false;
++
++	const double S = XR_TELEPORT_SPEED, G = XR_TELEPORT_GRAVITY;
++	auto at = [&](double t) {
++		return DVector3(h.x + upm * h.fx * S * t, h.y + upm * h.fy * S * t, h.z + upm / stretch * (h.fz * S * t - 0.5 * G * t * t));
++	};
++	auto floorAt = [&](const DVector3 &v) { return m->Level->PointInSector(v.XY())->floorplane.ZatPoint(v.XY()); };
++	auto ceilAt = [&](const DVector3 &v) { return m->Level->PointInSector(v.XY())->ceilingplane.ZatPoint(v.XY()); };
++
++	const double dt = 0.025, tMax = 2.5;
++	double lo = 0, hi = -1;
++	bool blockedByCeiling = false;
++	for (double t = dt; t <= tMax; t += dt)
++	{
++		const DVector3 v = at(t);
++		if (v.Z > ceilAt(v)) { *tEnd = (float)t; blockedByCeiling = true; break; }
++		if (v.Z <= floorAt(v)) { hi = t; break; }
++		lo = t;
++	}
++	if (hi < 0)
++	{
++		if (!blockedByCeiling) *tEnd = (float)tMax;
++		return false;
++	}
++	for (int i = 0; i < 8; i++)
++	{
++		const double mid = 0.5 * (lo + hi);
++		const DVector3 v = at(mid);
++		if (v.Z <= floorAt(v)) hi = mid; else lo = mid;
++	}
++	DVector3 d = at(hi);
++	d.Z = floorAt(d);
++	*tEnd = (float)hi;
++	dest[0] = d.X; dest[1] = d.Y; dest[2] = d.Z;
++
++	if (d.Z - m->Z() > 48.) return false;
++
++	// Nothing solid between the eye and the destination (the arc itself may pass over low obstacles).
++	{
++		const double sz = p->viewheight;
++		const DVector3 from = m->PosAtZ(m->Z() - m->Floorclip + sz);
++		const DVector3 to(d.X, d.Y, d.Z + sz);
++		const DVector3 delta = to - from;
++		const double hd = delta.XY().Length();
++		const double dist = delta.Length();
++		FLineTraceData tr;
++		if (dist > 1.)
++		{
++			const DAngle ang = VecToAngle(delta.X, delta.Y);
++			const DAngle pitch = -VecToAngle(hd, delta.Z);
++			if (P_LineTrace(m, ang, dist, pitch, 0, sz, 0, 0, &tr) && tr.HitType != TRACE_HitNone && tr.Distance < dist - 2.)
++				return false;
++		}
++	}
++
++	// Room for the player at the destination.
++	const double savedZ = m->Z();
++	m->SetZ(d.Z);
++	FCheckPosition tm;
++	const bool fits = P_CheckPosition(m, d.XY(), tm);
++	m->SetZ(savedZ);
++	if (!fits || tm.floorz - savedZ > 48. || tm.ceilingz - tm.floorz < m->Height) return false;
++	dest[2] = tm.floorz;
++	return true;
++}
++
++void XrTeleportGo(player_t *p, const double *dest)
++{
++	AActor *m = p->mo;
++	if (m == nullptr) return;
++	if (P_TeleportMove(m, DVector3(dest[0], dest[1], dest[2]), false))
++	{
++		m->Vel.Zero();
++		m->ClearInterpolation();
++	}
++}
++
+ // ---- interactive forearm HUD ----
+ // A panel above the left controller: health, armor, ammo of the ready weapon and the weapon slots. The game draws it
+ // into the bottom-left corner of the screen image (its aspect is the panel's 512:192, a quarter of the screen high), the
+diff --git a/wadsrc/static/menudef.txt b/wadsrc/static/menudef.txt
+index 9b55288..eb104a9 100644
+--- a/wadsrc/static/menudef.txt
++++ b/wadsrc/static/menudef.txt
+@@ -356,6 +356,12 @@ DefaultOptionMenu
+ 	}
+ }
+ 
++OptionValue "DoomXRMoveMode"
++{
++	0, "Smooth (left stick)"
++	1, "Teleport (stick forward, aim, release)"
++}
++
+ OptionValue "DoomXRTurnMode"
+ {
+ 	0, "Smooth"
+@@ -390,6 +396,7 @@ OptionMenu "DoomXRVRMenu" protected
+ 	Slider "Head-locked HUD distance",		vr_hud_distance,	0.8, 4.0, 0.1, 1
+ 	StaticText " "
+ 	StaticText "Movement", 1
++	Option "Moving",						vr_move_mode,		DoomXRMoveMode
+ 	Option "Turning",						vr_turn_mode,		DoomXRTurnMode
+ 	Slider "Snap turn angle",				vr_snap_turn_degrees, 10, 90, 5, 0
+ 	Option "Walking view bob",				vr_viewbob,			OnOff
