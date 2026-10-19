@@ -25,17 +25,26 @@ diff --git a/src/rendering/hwrenderer/scene/hw_weapon.cpp b/src/rendering/hwrend
  CVAR(Float, vr_weapon_model_pitch, 0.0f, CVAR_ARCHIVE | CVAR_GLOBALCONFIG)	// tips a hand-held 3D weapon model up (+) or down (-) from the controller's aim, degrees
  
  //==========================================================================
-@@ -149,8 +159,19 @@
+@@ -149,8 +159,28 @@
  {
  	if (xrHandValid) DrawXrHandSprites(state, xrHand, false);
  	if (xrHandLValid) DrawXrHandSprites(state, xrHandL, true);
 +
 +	// Weapon models and hands share one depth buffer, cleared once, so they hide each other correctly.
++	// Nothing below runs (and no state changes) when there is neither a model nor a hand to draw.
++	bool anyModel = false;
++	for (auto &h : hudsprites)
++		if (h.mframe && h.weapon && h.weapon->GetID() < PSP_TARGETCENTER) { anyModel = true; break; }
++	const bool anyHand = vr_hand_model && (xrHandValid || xrHandLValid);
++	if (!anyModel && !anyHand) return;
 +	screen->mViewpoints->SetViewpoint(state, &VPUniforms);	// the eye's view and projection
 +	state.SetDepthMask(true);	// glClear leaves the depth buffer alone while the depth mask is off
 +	state.Clear(CT_Depth);
-+	state.EnableMultisampling(false);
-+	state.EnableFog(false);
++	if (anyModel)
++	{
++		state.EnableMultisampling(false);
++		state.EnableFog(false);
++	}
  	if (xrHandValid) DrawXrHandModels(state, xrHand, false);
  	if (xrHandLValid) DrawXrHandModels(state, xrHandL, true);
 +	if (xrHandValid) DrawXrHandModel(state, xrHand, false);
@@ -45,7 +54,7 @@ diff --git a/src/rendering/hwrenderer/scene/hw_weapon.cpp b/src/rendering/hwrend
  }
  
  // The weapon layers of the left hand (dual wield) are PSP_LEFT and PSP_LEFTFLASH; everything else is the right hand's.
-@@ -278,12 +299,8 @@
+@@ -278,12 +308,8 @@
  	VSMatrix handToWorld;
  	handToWorld.loadMatrix(m);
  
@@ -59,7 +68,7 @@ diff --git a/src/rendering/hwrenderer/scene/hw_weapon.cpp b/src/rendering/hwrend
  
  	auto oldlightmode = lightmode;
  	if (isSoftwareLighting(oldlightmode)) SetFallbackLightMode();
-@@ -305,8 +322,119 @@
+@@ -305,8 +331,119 @@
  	screen->mBones->Unmap();
  	xrHudModelToWorld = nullptr;
  	lightmode = oldlightmode;
