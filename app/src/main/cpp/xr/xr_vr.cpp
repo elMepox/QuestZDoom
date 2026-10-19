@@ -1069,7 +1069,7 @@ int xr_frame_end(int uiWanted)
 	XrCompositionLayerProjectionView pv[2];
 	XrCompositionLayerProjection proj = {XR_TYPE_COMPOSITION_LAYER_PROJECTION};
 	XrCompositionLayerQuad quad = {XR_TYPE_COMPOSITION_LAYER_QUAD};
-	const XrCompositionLayerBaseHeader *layers[10];
+	const XrCompositionLayerBaseHeader *layers[16];
 	uint32_t nl = 0;
 
 	if (g.active && g.eyeDone[0] && g.eyeDone[1])
@@ -1290,6 +1290,31 @@ int xr_frame_end(int uiWanted)
 			quad.size = {g.uiW, g.uiH};
 			layers[nl++] = (const XrCompositionLayerBaseHeader *)&quad;
 		}
+	}
+
+	// A single layer with a non-unit or non-finite orientation makes xrEndFrame fail with XR_ERROR_POSE_INVALID
+	// and the whole frame is dropped: normalise quad orientations and skip a layer that cannot be repaired.
+	{
+		uint32_t kept = 0;
+		for (uint32_t i = 0; i < nl; i++)
+		{
+			if (layers[i]->type == XR_TYPE_COMPOSITION_LAYER_QUAD)
+			{
+				XrCompositionLayerQuad *q = (XrCompositionLayerQuad *)layers[i];
+				XrQuaternionf &o = q->pose.orientation;
+				const float n2 = o.x * o.x + o.y * o.y + o.z * o.z + o.w * o.w;
+				const XrVector3f &p = q->pose.position;
+				if (!(n2 > 1e-6f) || !isfinite(n2) || !isfinite(p.x) || !isfinite(p.y) || !isfinite(p.z))
+				{
+					LOGI("dropping quad layer with invalid pose (q %.3f %.3f %.3f %.3f)", o.x, o.y, o.z, o.w);
+					continue;
+				}
+				const float inv = 1.f / sqrtf(n2);
+				o.x *= inv; o.y *= inv; o.z *= inv; o.w *= inv;
+			}
+			layers[kept++] = layers[i];
+		}
+		nl = kept;
 	}
 
 	XrFrameEndInfo ei = {XR_TYPE_FRAME_END_INFO};
