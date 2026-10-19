@@ -23,12 +23,10 @@ that replaces the Doom pistol. It has no third-party assets. Put the pk3 into th
 (`/sdcard/Android/data/io.github.elmepox.doomxr/files/mods`), pick it in the panel with a Doom IWAD and start a game.
 The pistol should sit in the right hand with its barrel along the controller's aim and fire from the muzzle.
 
-`testmods/model-weapons-ps1/` builds `doomxr-model-weapons-ps1.pk3` the same way: animated PS1-style low-poly models
-(128-284 triangles, one baked 128/256 px atlas each) for all nine Doom 1/2 weapons, fist and chainsaw included. Each
-weapon is an MD3 with one frame per sprite frame (recoil, pistol slide, shotgun pump, super shotgun break-open,
-chaingun spin, chainsaw shake); a second MODELDEF block puts a low-poly muzzle flash on the flash layer, which its
-Bright states draw full bright. The MD3/PNG files in `models/` are written by the `ps1_doom_export.py` text block of
-`../models/doom_weapons_ps1/doom_weapons_ps1.blend` (outside this repo), in centimetres with the grip at the origin.
+The PS1-style weapon models mod (animated low-poly MD3 models for all nine Doom 1/2 weapons, with muzzle flashes on the
+flash layer) lives in its own repository, [elMepox/doomxr-mods](https://github.com/elMepox/doomxr-mods), under
+`model-weapons-ps1/`. It uses the same MODELDEF layout: one MD3 frame per sprite frame, a second MODELDEF block for the
+flash layer, MD3 units in centimetres with the grip at the origin.
 
 ## Status
 
