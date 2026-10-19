@@ -2,6 +2,7 @@ package io.github.elmepox.doomxr;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -10,6 +11,7 @@ import android.provider.OpenableColumns;
 import android.text.InputType;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -33,7 +35,10 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -46,6 +51,7 @@ public class LibraryActivity extends Activity {
     static final String CATALOG_URL =
             "https://raw.githubusercontent.com/elmepox/questzdoom/doomxr/catalog/catalog.json";
     private static final int REQ_IMPORT = 1;
+    private static final String PREFS = "launcher", PREF_IWAD = "iwad", PREF_MODS = "mods";
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -122,6 +128,14 @@ public class LibraryActivity extends Activity {
         iwadSpinner = new Spinner(this);
         iwadSpinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, iwads));
         iwadSpinner.setTag(iwadFiles);
+        // Restore the last selection (a file that no longer exists simply drops out).
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        int sel = iwadFiles.indexOf(prefs.getString(PREF_IWAD, ""));
+        iwadSpinner.setSelection(Math.max(sel, 0));
+        iwadSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View v, int pos, long id) { saveSelection(); }
+            @Override public void onNothingSelected(AdapterView<?> parent) { }
+        });
         content.addView(label("Игра (IWAD)"));
         content.addView(iwadSpinner);
         content.addView(label("Моды (порядок загрузки сверху вниз)"));
@@ -130,6 +144,8 @@ public class LibraryActivity extends Activity {
         for (File f : mods) {
             CheckBox cb = new CheckBox(this);
             cb.setText(f.getName());
+            cb.setChecked(prefs.getStringSet(PREF_MODS, Collections.emptySet()).contains(f.getName()));
+            cb.setOnCheckedChangeListener((b, on) -> saveSelection());
             modBoxes.add(cb);
             content.addView(cb);
         }
@@ -187,8 +203,24 @@ public class LibraryActivity extends Activity {
 
     // --- actions ---------------------------------------------------------------------------
 
+    /** Remembers the chosen IWAD and mods so the panel opens with them ticked next time. */
+    @SuppressWarnings("unchecked")
+    private void saveSelection() {
+        if (iwadSpinner == null) return;
+        // Keep entries for mods not currently listed: only touch names this screen shows.
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        Set<String> mods = new HashSet<>(prefs.getStringSet(PREF_MODS, Collections.emptySet()));
+        for (CheckBox cb : modBoxes) {
+            if (cb.isChecked()) mods.add(cb.getText().toString()); else mods.remove(cb.getText().toString());
+        }
+        List<String> iwadFiles = (List<String>) iwadSpinner.getTag();
+        prefs.edit().putString(PREF_IWAD, iwadFiles.get(iwadSpinner.getSelectedItemPosition()))
+                .putStringSet(PREF_MODS, mods).apply();
+    }
+
     @SuppressWarnings("unchecked")
     private void play() {
+        saveSelection();
         List<String> files = new ArrayList<>();
         for (CheckBox cb : modBoxes) if (cb.isChecked()) files.add(cb.getText().toString());
         List<String> iwadFiles = (List<String>) iwadSpinner.getTag();

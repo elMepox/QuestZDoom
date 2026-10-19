@@ -47,3 +47,8 @@ local.properties
 *.iml
 .idea/
 captures/
+
+# VS Code: share the tasks, ignore the rest
+!.vscode/
+!.vscode/tasks.json
+!.vscode/extensions.json
