@@ -1,0 +1,27 @@
+{
+  // Build outputs stay out of search and the file tree.
+  "files.exclude": {
+    "**/.gradle": true,
+    "app/.cxx": true
+  },
+  "search.exclude": {
+    "app/build": true,
+    "app/.cxx": true,
+    "external": true,
+    "**/build-timings*": true
+  },
+  "files.watcherExclude": {
+    "app/build/**": true,
+    "app/.cxx/**": true,
+    "external/**": true
+  },
+  // Do not show the 40 patched files of the engine submodule as noise in Source Control.
+  "git.ignoreSubmodules": true,
+  "files.associations": {
+    "*.patch": "diff",
+    "*.cmake": "cmake"
+  },
+  "terminal.integrated.env.osx": {
+    "ANDROID_HOME": "${env:HOME}/Library/Android/sdk"
+  }
+}
