@@ -69,7 +69,7 @@ diff --git a/src/common/rendering/gles/gles_buffers.cpp b/src/common/rendering/g
  			{
  				if (gles.glesMode >= GLES_MODE_OGL3)
  					glVertexAttribIPointer(i, attrinf.size, attrinf.format, (GLsizei)mStride, (void*)(intptr_t)ofs);
-+				else // GLSL ES 1.00: bone selectors arrive as floats 0..255
++				else if (gles.glesMode == GLES_MODE_GLES) // GLSL ES 1.00: bone selectors arrive as floats 0..255
 +					glVertexAttribPointer(i, attrinf.size, attrinf.format, GL_FALSE, (GLsizei)mStride, (void*)(intptr_t)ofs);
  			}
  		}
@@ -83,7 +83,7 @@ diff --git a/src/common/rendering/gles/gles_renderstate.cpp b/src/common/renderi
  			activeShader->cur->muBoneIndexBase.Set(mBoneIndexBase);
 +		}
 +	}
-+	else if (gles.maxBones > 0 && mBoneIndexBase >= 0)
++	else if (gles.glesMode == GLES_MODE_GLES && gles.maxBones > 0 && mBoneIndexBase >= 0)
 +	{
 +		// GLES: the uniform array only holds one model's skeleton, so upload this model's bones from its base
 +		float* bonesPtr = ((float*)screen->mBones->GetBuffer()->Memory()) + mBoneIndexBase * 16;
