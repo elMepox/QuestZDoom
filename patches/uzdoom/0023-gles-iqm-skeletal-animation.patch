@@ -109,7 +109,7 @@ diff --git a/wadsrc/static/shaders_gles/glsl/main.vp b/wadsrc/static/shaders_gle
  #endif
  
  varying vec4 pixelpos;
-@@ -194,7 +197,46 @@
+@@ -194,7 +197,49 @@
  		float totalWeight = aBoneWeight.x + aBoneWeight.y + aBoneWeight.z + aBoneWeight.w;
  		float weightMultiplier = 1.0 / totalWeight;
  		vec4 boneWeight = aBoneWeight * weightMultiplier;
@@ -135,7 +135,10 @@ diff --git a/wadsrc/static/shaders_gles/glsl/main.vp b/wadsrc/static/shaders_gle
 +{
 +	if (weight != 0.0)
 +	{
-+		mat4 transform = bones[uBoneIndexBase + int(boneIndex + 0.5)];
++		// a skeleton larger than MAXIMUM_BONES gets its extra bones clamped to the last one instead of an out-of-range read
++		int boneId = uBoneIndexBase + int(boneIndex + 0.5);
++		if (boneId > MAXIMUM_BONES - 1) boneId = MAXIMUM_BONES - 1;
++		mat4 transform = bones[boneId];
 +		mat3 rotation = mat3(transform[0].xyz, transform[1].xyz, transform[2].xyz);
 +		position += (transform * aPosition) * weight;
 +		normal += (rotation * aNormal.xyz) * weight;
