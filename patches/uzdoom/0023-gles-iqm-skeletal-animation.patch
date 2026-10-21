@@ -1,0 +1,161 @@
+diff --git a/src/common/rendering/gles/gles_system.h b/src/common/rendering/gles/gles_system.h
+--- a/src/common/rendering/gles/gles_system.h
++++ b/src/common/rendering/gles/gles_system.h
+@@ -117,6 +117,7 @@
+ 		bool depthClampAvailable;
+ 		bool anistropicFilterAvailable;
+ 		int glesMode;
++		int maxBones;	// size of the bones[] uniform array; 0 = no skeletal animation
+ 		const char* shaderVersionString;
+ 		int max_texturesize;
+ 		char* vendorstring;
+diff --git a/src/common/rendering/gles/gles_system.cpp b/src/common/rendering/gles/gles_system.cpp
+--- a/src/common/rendering/gles/gles_system.cpp
++++ b/src/common/rendering/gles/gles_system.cpp
+@@ -247,7 +247,27 @@
+ 			gles.useMappedBuffers = true;
+ 			gles.depthClampAvailable = true;
+ 			gles.anistropicFilterAvailable = true;
++		}
++
++		if (gles.glesMode == GLES_MODE_GLES)
++		{
++			// GLSL ES 1.00 has no integer attributes and no uniform buffers: the bones go into a plain uniform
++			// array (selectors as float attributes), sized to what the vertex shader has left after the rest
++			// of the uniforms (about 60 vec4).
++#ifndef GL_MAX_VERTEX_UNIFORM_VECTORS
++#define GL_MAX_VERTEX_UNIFORM_VECTORS 0x8DFB
++#endif
++			GLint maxVertexUniforms = 0;
++			glGetIntegerv(GL_MAX_VERTEX_UNIFORM_VECTORS, &maxVertexUniforms);
++			gles.maxBones = (maxVertexUniforms - 80) / 4;
++			if (gles.maxBones < 0) gles.maxBones = 0;
++			if (gles.maxBones > 128) gles.maxBones = 128;
++			Printf("GLES: %d vertex uniform vectors, %d bones for model animation\n", maxVertexUniforms, gles.maxBones);
+ 		}
++		else
++		{
++			gles.maxBones = gles.numlightvectors;
++		}
+ 
+ 		setGlVersion(glVersion);
+ 	}
+diff --git a/src/common/rendering/gles/gles_shader.cpp b/src/common/rendering/gles/gles_shader.cpp
+--- a/src/common/rendering/gles/gles_shader.cpp
++++ b/src/common/rendering/gles/gles_shader.cpp
+@@ -257,7 +257,7 @@
+ 		uniform vec4 lights[MAXIMUM_LIGHT_VECTORS];
+ 
+ 		// bone matrix buffers
+-		uniform mat4 bones[MAXIMUM_LIGHT_VECTORS];
++		uniform mat4 bones[MAXIMUM_BONES];
+ 
+ 		uniform	mat4 ProjectionMatrix;
+ 		uniform	mat4 ViewMatrix;
+@@ -679,6 +679,9 @@
+ 		FString variantConfig = "\n";
+ 
+ 		variantConfig.AppendFormat("#define MAXIMUM_LIGHT_VECTORS %d\n", gles.numlightvectors);
++		variantConfig.AppendFormat("#define MAXIMUM_BONES %d\n", gles.maxBones > 0 ? gles.maxBones : 1);
++		if (gles.glesMode == GLES_MODE_GLES && gles.maxBones > 0)
++			variantConfig.AppendFormat("#define GLES_BONES 1\n");
+ 		variantConfig.AppendFormat("#define DEF_TEXTURE_MODE %d\n", flavour.textureMode);
+ 		variantConfig.AppendFormat("#define DEF_TEXTURE_FLAGS %d\n", flavour.texFlags);
+ 		variantConfig.AppendFormat("#define DEF_BLEND_FLAGS %d\n", flavour.blendFlags & 0x7);
+diff --git a/src/common/rendering/gles/gles_buffers.cpp b/src/common/rendering/gles/gles_buffers.cpp
+--- a/src/common/rendering/gles/gles_buffers.cpp
++++ b/src/common/rendering/gles/gles_buffers.cpp
+@@ -305,6 +305,8 @@
+ 			{
+ 				if (gles.glesMode >= GLES_MODE_OGL3)
+ 					glVertexAttribIPointer(i, attrinf.size, attrinf.format, (GLsizei)mStride, (void*)(intptr_t)ofs);
++				else if (gles.glesMode == GLES_MODE_GLES) // GLSL ES 1.00: bone selectors arrive as floats 0..255
++					glVertexAttribPointer(i, attrinf.size, attrinf.format, GL_FALSE, (GLsizei)mStride, (void*)(intptr_t)ofs);
+ 			}
+ 		}
+ 		i++;
+diff --git a/src/common/rendering/gles/gles_renderstate.cpp b/src/common/rendering/gles/gles_renderstate.cpp
+--- a/src/common/rendering/gles/gles_renderstate.cpp
++++ b/src/common/rendering/gles/gles_renderstate.cpp
+@@ -352,6 +352,18 @@
+ 			glUniformMatrix4fv(activeShader->cur->bones_index, number, false, bonesPtr);
+ 
+ 			activeShader->cur->muBoneIndexBase.Set(mBoneIndexBase);
++		}
++	}
++	else if (gles.glesMode == GLES_MODE_GLES && gles.maxBones > 0 && mBoneIndexBase >= 0)
++	{
++		// GLES: the uniform array only holds one model's skeleton, so upload this model's bones from its base
++		float* bonesPtr = ((float*)screen->mBones->GetBuffer()->Memory()) + mBoneIndexBase * 16;
++		int number = int(screen->mBones->GetCurrentIndex()) - mBoneIndexBase;
++		if (number > gles.maxBones) number = gles.maxBones;
++		if (number > 0)
++		{
++			glUniformMatrix4fv(activeShader->cur->bones_index, number, false, bonesPtr);
++			activeShader->cur->muBoneIndexBase.Set(0);
+ 		}
+ 	}
+ 
+diff --git a/wadsrc/static/shaders_gles/glsl/main.vp b/wadsrc/static/shaders_gles/glsl/main.vp
+--- a/wadsrc/static/shaders_gles/glsl/main.vp
++++ b/wadsrc/static/shaders_gles/glsl/main.vp
+@@ -29,6 +29,9 @@
+ #if __VERSION__ >= 300
+ attribute vec4 aBoneWeight;
+ attribute uvec4 aBoneSelector;
++#elif defined(GLES_BONES)
++attribute vec4 aBoneWeight;
++attribute vec4 aBoneSelector;	// GLSL ES 1.00 has no integer attributes: bone indices as floats
+ #endif
+ 
+ varying vec4 pixelpos;
+@@ -194,7 +197,49 @@
+ 		float totalWeight = aBoneWeight.x + aBoneWeight.y + aBoneWeight.z + aBoneWeight.w;
+ 		float weightMultiplier = 1.0 / totalWeight;
+ 		vec4 boneWeight = aBoneWeight * weightMultiplier;
++
++		AddWeightedBone(aBoneSelector.x, boneWeight.x, result.Position, result.Normal);
++		AddWeightedBone(aBoneSelector.y, boneWeight.y, result.Position, result.Normal);
++		AddWeightedBone(aBoneSelector.z, boneWeight.z, result.Position, result.Normal);
++		AddWeightedBone(aBoneSelector.w, boneWeight.w, result.Position, result.Normal);
++
++		result.Position.w = 1.0; // For numerical stability
++	}
++	else
++	{
++		result.Position = aPosition;
++		result.Normal = GetAttrNormal();
++	}
++	return result;
++}
++
++#elif defined(GLES_BONES)
++
++void AddWeightedBone(float boneIndex, float weight, inout vec4 position, inout vec3 normal)
++{
++	if (weight != 0.0)
++	{
++		// a skeleton larger than MAXIMUM_BONES gets its extra bones clamped to the last one instead of an out-of-range read
++		int boneId = uBoneIndexBase + int(boneIndex + 0.5);
++		if (boneId > MAXIMUM_BONES - 1) boneId = MAXIMUM_BONES - 1;
++		mat4 transform = bones[boneId];
++		mat3 rotation = mat3(transform[0].xyz, transform[1].xyz, transform[2].xyz);
++		position += (transform * aPosition) * weight;
++		normal += (rotation * aNormal.xyz) * weight;
++	}
++}
+ 
++BonesResult ApplyBones()
++{
++	BonesResult result;
++	if (uBoneIndexBase >= 0 && aBoneWeight != vec4(0.0))
++	{
++		result.Position = vec4(0.0);
++		result.Normal = vec3(0.0);
++
++		float totalWeight = aBoneWeight.x + aBoneWeight.y + aBoneWeight.z + aBoneWeight.w;
++		vec4 boneWeight = aBoneWeight / totalWeight;
++
+ 		AddWeightedBone(aBoneSelector.x, boneWeight.x, result.Position, result.Normal);
+ 		AddWeightedBone(aBoneSelector.y, boneWeight.y, result.Position, result.Normal);
+ 		AddWeightedBone(aBoneSelector.z, boneWeight.z, result.Position, result.Normal);
