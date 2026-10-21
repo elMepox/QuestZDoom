@@ -91,6 +91,12 @@ struct State
 	float panelBack = 0.11f, panelLift = 0.05f;	// watch mode: metres from the controller towards the elbow, and off the back of the wrist
 	bool laserHit = false;
 	float laserLen = 0;
+	Swap tele;			// teleport arc and landing marker
+	Swap fade;			// head-locked black quad for the teleport fade
+	struct Tele { bool on = false, valid = false; int hand = 0; float tEnd = 0; unsigned lastFrame = 0; } teleArc;
+	float fadeAlpha = 0;
+	uint32_t maxLayers = 16;	// xrGetSystemProperties: layers the compositor accepts per frame (more makes xrEndFrame fail and the frame go black)
+	unsigned fadeFrame = 0;
 
 	// recentering
 	unsigned frameNo = 0;
@@ -112,6 +118,7 @@ struct State
 const float kRad2Deg = 57.29577951308232f;
 
 struct Vec3 { float x, y, z; };
+constexpr int kArcSegs = 12;
 
 Vec3 rotate(const XrQuaternionf &q, Vec3 v)
 {
@@ -611,7 +618,9 @@ int xr_init(void)
 	if (!check(xrGetSystem(g.instance, &si, &g.system), "xrGetSystem")) return 0;
 	XrSystemProperties sp = {XR_TYPE_SYSTEM_PROPERTIES};
 	xrGetSystemProperties(g.instance, g.system, &sp);
-	LOGI("system: %s", sp.systemName);
+	// Quest 3 reports 32 but rejects frames above 16 (XR_ERROR_LAYER_LIMIT_EXCEEDED): never go past 16.
+	g.maxLayers = sp.graphicsProperties.maxLayerCount >= 8 && sp.graphicsProperties.maxLayerCount < 16 ? sp.graphicsProperties.maxLayerCount : 16;
+	LOGI("system: %s (max layers %u)", sp.systemName, g.maxLayers);
 
 	uint32_t vc = 0;
 	xrEnumerateViewConfigurationViews(g.instance, g.system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &vc, nullptr);
@@ -699,6 +708,8 @@ int xr_init(void)
 	if (!createSwapchain(g.laser, format, 8, 8)) LOGW("laser swapchain unavailable");
 	if (!createSwapchain(g.panel, format, 512, 192)) LOGW("panel swapchain unavailable");
 	for (auto &b : g.beam) if (!createSwapchain(b.sw, format, 8, 8)) LOGW("beam swapchain unavailable");
+	if (!createSwapchain(g.tele, format, 8, 8)) LOGW("teleport swapchain unavailable");
+	if (!createSwapchain(g.fade, format, 8, 8)) LOGW("fade swapchain unavailable");
 	g.ok = true;
 	LOGI("OpenXR initialized");
 	return 1;
@@ -858,6 +869,22 @@ void xr_laser_set(int hand, float lengthMeters, unsigned rgb, float startMeters)
 	b.rgb[2] = (rgb & 255) / 255.f;
 	b.lastFrame = g.frameNo;
 	b.used = true;
+}
+
+void xr_teleport_arc(int hand, int valid, float endSeconds)
+{
+	if (hand < 0 || hand > 1) return;
+	g.teleArc.on = true;
+	g.teleArc.hand = hand;
+	g.teleArc.valid = valid != 0;
+	g.teleArc.tEnd = endSeconds < 0.f ? 0.f : (endSeconds > 3.f ? 3.f : endSeconds);
+	g.teleArc.lastFrame = g.frameNo;
+}
+
+void xr_fade_set(float alpha)
+{
+	g.fadeAlpha = alpha < 0.f ? 0.f : (alpha > 1.f ? 1.f : alpha);
+	g.fadeFrame = g.frameNo;
 }
 
 void xr_hud_set_panel(int on, float width, float stripFrac, int watch, float back, float lift)
@@ -1069,7 +1096,7 @@ int xr_frame_end(int uiWanted)
 	XrCompositionLayerProjectionView pv[2];
 	XrCompositionLayerProjection proj = {XR_TYPE_COMPOSITION_LAYER_PROJECTION};
 	XrCompositionLayerQuad quad = {XR_TYPE_COMPOSITION_LAYER_QUAD};
-	const XrCompositionLayerBaseHeader *layers[16];
+	const XrCompositionLayerBaseHeader *layers[48];
 	uint32_t nl = 0;
 
 	if (g.active && g.eyeDone[0] && g.eyeDone[1])
@@ -1263,6 +1290,122 @@ int xr_frame_end(int uiWanted)
 		}
 	}
 
+
+	// Teleport arc: the ballistic curve of the aiming hand (same speed and gravity the engine uses to find the landing
+	// spot), drawn as short quads, with a flat marker where it ends.
+	XrCompositionLayerQuad arcQuad[kArcSegs + 1];
+	for (auto &q : arcQuad) q = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+	// Every segment is a compositor layer and the compositor takes a limited number per frame: use what is left after
+	// the other layers, keeping room for the landing marker and the fade.
+	const int segs = (int)g.maxLayers - (int)nl - 2 > kArcSegs ? kArcSegs : (int)g.maxLayers - (int)nl - 2;
+	if (g.teleArc.on && segs >= 3 && !showUi && g.shouldRender && g.frameNo - g.teleArc.lastFrame <= 6 && g.aimValid[g.teleArc.hand] &&
+	    g.tele.handle != XR_NULL_HANDLE && g.teleArc.tEnd > 0.05f)
+	{
+		if (GLuint fbo = acquire(g.tele))
+		{
+			GLint prev = 0;
+			glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev);
+			GLboolean sc = glIsEnabled(GL_SCISSOR_TEST);
+			glDisable(GL_SCISSOR_TEST);
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+			const GLfloat ok[4] = {0.25f, 1.f, 0.4f, 0.9f}, bad[4] = {1.f, 0.25f, 0.2f, 0.9f};
+			glClearBufferfv(GL_COLOR, 0, g.teleArc.valid ? ok : bad);
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev);
+			if (sc) glEnable(GL_SCISSOR_TEST);
+			release(g.tele);
+			const XrPosef &a = g.aim[g.teleArc.hand];
+			const Vec3 d0 = rotate(a.orientation, {0, 0, -1});
+			const Vec3 head = {0.5f * (g.views[0].pose.position.x + g.views[1].pose.position.x),
+			                   0.5f * (g.views[0].pose.position.y + g.views[1].pose.position.y),
+			                   0.5f * (g.views[0].pose.position.z + g.views[1].pose.position.z)};
+			auto at = [&](float t) {
+				return Vec3{a.position.x + d0.x * XR_TELEPORT_SPEED * t,
+				            a.position.y + d0.y * XR_TELEPORT_SPEED * t - 0.5f * XR_TELEPORT_GRAVITY * t * t,
+				            a.position.z + d0.z * XR_TELEPORT_SPEED * t};
+			};
+			Vec3 prevP = at(0.f);
+			for (int i = 1; i <= segs; i++)
+			{
+				const Vec3 cur = at(g.teleArc.tEnd * (float)i / (float)segs);
+				const Vec3 seg = {cur.x - prevP.x, cur.y - prevP.y, cur.z - prevP.z};
+				const float sl = sqrtf(seg.x * seg.x + seg.y * seg.y + seg.z * seg.z);
+				if (sl > 1e-3f)
+				{
+					const Vec3 dir = {seg.x / sl, seg.y / sl, seg.z / sl};
+					const Vec3 mid = {0.5f * (cur.x + prevP.x), 0.5f * (cur.y + prevP.y), 0.5f * (cur.z + prevP.z)};
+					const Vec3 toHead = {head.x - mid.x, head.y - mid.y, head.z - mid.z};
+					const float dd = toHead.x * dir.x + toHead.y * dir.y + toHead.z * dir.z;
+					Vec3 z = {toHead.x - dir.x * dd, toHead.y - dir.y * dd, toHead.z - dir.z * dd};
+					const float zl = sqrtf(z.x * z.x + z.y * z.y + z.z * z.z);
+					if (zl > 1e-4f)
+					{
+						z = {z.x / zl, z.y / zl, z.z / zl};
+						const Vec3 y = {z.y * dir.z - z.z * dir.y, z.z * dir.x - z.x * dir.z, z.x * dir.y - z.y * dir.x};
+						XrCompositionLayerQuad &q = arcQuad[i - 1];
+						q.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+						q.space = g.space;
+						q.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+						q.subImage.swapchain = g.tele.handle;
+						q.subImage.imageRect.offset = {0, 0};
+						q.subImage.imageRect.extent = {g.tele.width, g.tele.height};
+						q.pose.orientation = quatFromBasis(dir, y, z);
+						q.pose.position = {mid.x, mid.y, mid.z};
+						q.size = {sl * 1.05f, 0.016f};
+						layers[nl++] = (const XrCompositionLayerBaseHeader *)&q;
+					}
+				}
+				prevP = cur;
+			}
+			// Landing marker: a flat square on the floor at the end of the curve.
+			XrCompositionLayerQuad &m = arcQuad[kArcSegs];
+			m.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+			m.space = g.space;
+			m.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+			m.subImage.swapchain = g.tele.handle;
+			m.subImage.imageRect.offset = {0, 0};
+			m.subImage.imageRect.extent = {g.tele.width, g.tele.height};
+			const float h = 0.70710678f;	// -90 degrees about x: the quad lies flat, facing up
+			m.pose.orientation = {-h, 0, 0, h};
+			m.pose.position = {prevP.x, prevP.y + 0.01f, prevP.z};
+			m.size = {0.4f, 0.4f};
+			layers[nl++] = (const XrCompositionLayerBaseHeader *)&m;
+		}
+	}
+
+	// Teleport fade: a black quad right in front of the eyes, on top of everything else.
+	XrCompositionLayerQuad fadeQuad = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+	if (g.fadeAlpha > 0.01f && g.frameNo - g.fadeFrame <= 6 && g.shouldRender && g.fade.handle != XR_NULL_HANDLE)
+	{
+		if (GLuint fbo = acquire(g.fade))
+		{
+			GLint prev = 0;
+			glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev);
+			GLboolean sc = glIsEnabled(GL_SCISSOR_TEST);
+			glDisable(GL_SCISSOR_TEST);
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+			const GLfloat col[4] = {0, 0, 0, g.fadeAlpha};
+			glClearBufferfv(GL_COLOR, 0, col);
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev);
+			if (sc) glEnable(GL_SCISSOR_TEST);
+			release(g.fade);
+			const XrPosef &hp = g.views[0].pose;
+			const Vec3 head = {0.5f * (g.views[0].pose.position.x + g.views[1].pose.position.x),
+			                   0.5f * (g.views[0].pose.position.y + g.views[1].pose.position.y),
+			                   0.5f * (g.views[0].pose.position.z + g.views[1].pose.position.z)};
+			const Vec3 fwd = rotate(hp.orientation, {0, 0, -1});
+			fadeQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+			fadeQuad.space = g.space;
+			fadeQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+			fadeQuad.subImage.swapchain = g.fade.handle;
+			fadeQuad.subImage.imageRect.offset = {0, 0};
+			fadeQuad.subImage.imageRect.extent = {g.fade.width, g.fade.height};
+			fadeQuad.pose.orientation = hp.orientation;
+			fadeQuad.pose.position = {head.x + fwd.x * 0.12f, head.y + fwd.y * 0.12f, head.z + fwd.z * 0.12f};
+			fadeQuad.size = {1.6f, 1.6f};
+			layers[nl++] = (const XrCompositionLayerBaseHeader *)&fadeQuad;
+		}
+	}
+
 	if (nl == 0 && g.shouldRender && g.frameNo < 600)
 	{
 		// The compositor only leaves its loading screen once it receives a layer: show a black screen if nothing else.
@@ -1317,6 +1460,7 @@ int xr_frame_end(int uiWanted)
 		nl = kept;
 	}
 
+	if (nl > g.maxLayers) nl = g.maxLayers;
 	XrFrameEndInfo ei = {XR_TYPE_FRAME_END_INFO};
 	ei.displayTime = g.displayTime;
 	ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;

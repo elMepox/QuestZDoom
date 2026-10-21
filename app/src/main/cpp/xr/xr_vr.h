@@ -106,6 +106,17 @@ void xr_hud_set_panel(int on, float width, float stripFrac, int watch, float bac
 // scene, the beam in front of it on its own layer, so it must not begin inside the weapon). Call every game tic while the laser is on; it disappears by itself when the calls stop.
 void xr_laser_set(int hand, float lengthMeters, unsigned rgb, float startMeters);
 
+// ---- teleport locomotion ----
+// The ballistic curve the teleport arc follows: launch speed (m/s) along the controller's aim and gravity (m/s^2). The
+// engine uses the same numbers to find the landing spot.
+#define XR_TELEPORT_SPEED 7.0f
+#define XR_TELEPORT_GRAVITY 9.8f
+// Draws the arc of a hand for the next few frames, from the controller to where the curve is endSeconds long; green when
+// the landing spot is valid, red when not, with a marker on the floor at the end. Call every frame while aiming.
+void xr_teleport_arc(int hand, int valid, float endSeconds);
+// Black fade in front of both eyes, 0 = clear .. 1 = black. Disappears by itself when the calls stop.
+void xr_fade_set(float alpha);
+
 // ---- app switching ----
 // Leaves the game and shows the 2D mod library panel (implemented through DoomXRActivity.returnToLibrary).
 void xr_open_library(void);
