@@ -54,3 +54,4 @@ build/reports/
 reports/profile/
 *.perfetto-trace
 *.hprof
+!.vscode/settings.json

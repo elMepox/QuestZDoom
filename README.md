@@ -38,7 +38,7 @@ adb shell am start -n io.github.elmepox.doomxr/.LibraryActivity
 ```
 
 В VS Code те же шаги доступны задачами (`.vscode/tasks.json`, Cmd+Shift+B): подключение к Quest по Wi-Fi,
-сборка, установка, запуск, logcat, остановка. Адрес гарнитуры спрашивается один раз.
+сборка, установка, запуск, logcat, смена ветки, сброс движка. Подробно: [docs/vscode.md](docs/vscode.md).
 Подробности про скорость сборки — [docs/build-speed.md](docs/build-speed.md).
 
 ## Устройство репозитория
